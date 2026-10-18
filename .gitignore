@@ -1,0 +1,28 @@
+
+/target
+**/*.rs.bk
+Cargo.lock
+
+# --- Sorties du build release ---
+/dist
+/Installeur
+
+# --- Bases de données SQLite locales (données utilisateur) ---
+*.db
+*.db-shm
+*.db-wal
+*.db.backup_*
+
+# --- Fichiers de dump / code source concaténé ---
+code_source.txt
+
+# --- Fichiers système / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
