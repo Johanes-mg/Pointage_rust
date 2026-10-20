@@ -8,6 +8,7 @@ mod theme;
 mod ui;
 
 use database::Database;
+use std::sync::Arc;
 use ui::login::{LoginAction, LoginState};
 
 enum AppState {
@@ -75,16 +76,23 @@ fn main() -> Result<(), eframe::Error> {
         }
     };
 
-    let icone = theme::charger_icone_fenetre("logo.ico");
-
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1280.0, 800.0])
-        .with_min_inner_size([900.0, 600.0])
-        .with_title("Pointage");
+        .with_min_inner_size([900.0, 600.0]);
 
-    if let Some(ic) = icone {
-        viewport = viewport.with_icon(ic);
+    match theme::charger_icone_fenetre("logo.ico") {
+        Some(icone) => {
+            let w = icone.width;
+            let h = icone.height;
+            viewport = viewport.with_icon(Arc::new(icone));
+            eprintln!("Icone de fenetre chargee : {}x{}", w, h);
+        }
+        None => {
+            eprintln!("Attention : impossible de charger Images/logo.ico, icone par defaut utilisee.");
+        }
     }
+
+    viewport = viewport.with_title("Pointage");
 
     let options = eframe::NativeOptions {
         viewport,

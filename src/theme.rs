@@ -24,6 +24,9 @@ pub const JOUR_BIEN_BG: Color32 = Color32::from_rgb(200, 240, 210);
 pub const JOUR_MOYEN_BG: Color32 = Color32::from_rgb(255, 240, 200);
 pub const JOUR_MAUVAIS_BG: Color32 = Color32::from_rgb(255, 220, 220);
 
+// Couleur dédiée pour une demi-journée fériée (distincte de "moyen")
+pub const FERIE_DEMI_BG: Color32 = Color32::from_rgb(255, 236, 214);
+
 pub const SELECTION_TEXTE: Color32 = Color32::from_rgb(210, 214, 220);
 
 pub fn r_sm() -> Rounding {
@@ -234,7 +237,6 @@ pub fn bouton_image_texte(
     resp.clicked()
 }
 
-/// Bouton image centrée — conservé pour usage futur (accueil, etc.).
 #[allow(dead_code)]
 pub fn bouton_image_centree(
     ui: &mut egui::Ui,
@@ -353,6 +355,9 @@ pub fn message_inline(ui: &mut egui::Ui, texte: &str, succes: bool) {
 pub fn charger_icone_fenetre(nom: &str) -> Option<egui::IconData> {
     for chemin in chemins_possibles(nom) {
         if let Ok(bytes) = std::fs::read(&chemin) {
+            if let Some(icon) = decoder_ico(&bytes) {
+                return Some(icon);
+            }
             if let Ok(img) = image::load_from_memory(&bytes) {
                 let rgba = img.to_rgba8();
                 let taille = [rgba.width() as usize, rgba.height() as usize];
@@ -366,4 +371,140 @@ pub fn charger_icone_fenetre(nom: &str) -> Option<egui::IconData> {
         }
     }
     None
+}
+
+fn decoder_ico(bytes: &[u8]) -> Option<egui::IconData> {
+    if bytes.len() < 6 {
+        return None;
+    }
+    if bytes[0..2] != [0x00, 0x00] || bytes[2..4] != [0x01, 0x00] {
+        return None;
+    }
+    let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+    if count == 0 {
+        return None;
+    }
+    let entries_offset = 6;
+    let entries_size = 16;
+    if bytes.len() < entries_offset + entries_size * count {
+        return None;
+    }
+
+    let tailles_preferees: [u32; 4] = [32, 48, 64, 256];
+    let mut candidats: Vec<(u32, usize, usize)> = Vec::new();
+
+    for i in 0..count {
+        let base = entries_offset + i * entries_size;
+        let w = if bytes[base] == 0 { 256 } else { bytes[base] as u32 };
+        let h = if bytes[base + 1] == 0 { 256 } else { bytes[base + 1] as u32 };
+        if w != h {
+            continue;
+        }
+        let taille_data = u32::from_le_bytes([
+            bytes[base + 8],
+            bytes[base + 9],
+            bytes[base + 10],
+            bytes[base + 11],
+        ]) as usize;
+        let offset_data = u32::from_le_bytes([
+            bytes[base + 12],
+            bytes[base + 13],
+            bytes[base + 14],
+            bytes[base + 15],
+        ]) as usize;
+        let fin = match offset_data.checked_add(taille_data) {
+            Some(f) => f,
+            None => continue,
+        };
+        if fin > bytes.len() {
+            continue;
+        }
+        candidats.push((w, offset_data, taille_data));
+    }
+
+    if candidats.is_empty() {
+        return None;
+    }
+
+    let choix = tailles_preferees
+        .iter()
+        .find_map(|&t| candidats.iter().find(|(w, _, _)| *w == t))
+        .or_else(|| candidats.iter().max_by_key(|(w, _, _)| *w))?;
+
+    let (w, offset, len) = *choix;
+    let data = bytes.get(offset..offset + len)?;
+
+    if data.len() >= 8 && data[0..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+        let img = image::load_from_memory(data).ok()?;
+        let rgba = img.to_rgba8();
+        let (iw, ih) = rgba.dimensions();
+        return Some(egui::IconData {
+            rgba: rgba.into_raw(),
+            width: iw,
+            height: ih,
+        });
+    }
+
+    decoder_bmp_32(data, w)
+}
+
+fn decoder_bmp_32(data: &[u8], w: u32) -> Option<egui::IconData> {
+    if data.len() < 40 {
+        return None;
+    }
+    let header_size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    if header_size < 40 || header_size > data.len() {
+        return None;
+    }
+    let bpp = u16::from_le_bytes([data[14], data[15]]);
+    if bpp != 32 {
+        return None;
+    }
+
+    let h = w;
+    let pixels_offset = header_size;
+    let pixels_size = (w as usize) * (h as usize) * 4;
+    let masque_offset = pixels_offset + pixels_size;
+    let masque_size = (w as usize) * (h as usize) / 8;
+
+    if data.len() < masque_offset + masque_size {
+        return None;
+    }
+
+    let pixels = &data[pixels_offset..pixels_offset + pixels_size];
+    let masque = &data[masque_offset..masque_offset + masque_size];
+
+    let mut rgba = Vec::with_capacity(pixels_size);
+
+    for row in (0..h).rev() {
+        for col in 0..w {
+            let idx = ((row * w + col) * 4) as usize;
+            let b = pixels[idx];
+            let g = pixels[idx + 1];
+            let r = pixels[idx + 2];
+            let a = pixels[idx + 3];
+
+            let bit_idx = ((row * w + col) / 8) as usize;
+            let bit_pos = 7 - ((row * w + col) % 8);
+            let bit_masque = (masque[bit_idx] >> bit_pos) & 1;
+
+            let alpha_final = if a == 0 && bit_masque == 0 {
+                if r != 0 || g != 0 || b != 0 {
+                    255
+                } else {
+                    0
+                }
+            } else {
+                a
+            };
+
+            rgba.extend_from_slice(&[r, g, b, alpha_final]);
+        }
+    }
+
+    Some(egui::IconData {
+        rgba,
+        width: w,
+        height: h,
+    })
 }

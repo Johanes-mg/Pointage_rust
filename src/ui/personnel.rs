@@ -2,6 +2,18 @@ use crate::database::Database;
 use crate::models::Personnel;
 use crate::theme;
 
+const HAUTEUR_LIGNE: f32 = 34.0;
+const PAD_CELL: f32 = 10.0;
+const COL_GAP: f32 = 16.0;
+const MARGE: f32 = 12.0;
+
+const COL_MATRICULE: f32 = 100.0;
+const COL_NOM: f32 = 120.0;
+const COL_PRENOM: f32 = 120.0;
+const COL_TELEPHONE: f32 = 130.0;
+const COL_EMAIL: f32 = 200.0;
+const COL_GRADE: f32 = 130.0;
+
 pub struct PersonnelState {
     pub nom: String,
     pub prenom: String,
@@ -17,6 +29,7 @@ pub struct PersonnelState {
     pub message_ok: bool,
     pub cache: Option<Vec<Personnel>>,
     pub premier_affichage: bool,
+    pub mutation_effectuee: bool,
 }
 
 impl PersonnelState {
@@ -36,6 +49,7 @@ impl PersonnelState {
             message_ok: true,
             cache: None,
             premier_affichage: true,
+            mutation_effectuee: false,
         }
     }
 
@@ -74,8 +88,8 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState) {
     ui.add_space(8.0);
 
     let largeur_totale = ui.available_width();
-    let largeur_gauche = (largeur_totale * 0.42).max(400.0);
-    let largeur_droite = largeur_totale - largeur_gauche - 16.0;
+    let largeur_gauche = (largeur_totale * 0.36).max(390.0);
+    let largeur_droite = (largeur_totale - largeur_gauche - 16.0).max(320.0);
 
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(
@@ -92,7 +106,7 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState) {
             egui::vec2(largeur_droite, ui.available_height()),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
-                table_droite(ui, db, state);
+                table_droite(ui, db, state, largeur_droite);
             },
         );
     });
@@ -115,14 +129,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
             ui.memory_mut(|m| m.request_focus(egui::Id::new("prenom_field")));
         }
         ui.add_space(12.0);
-        if champ_mi_largeur(
-            ui,
-            "Prénom *",
-            &mut state.prenom,
-            largeur,
-            "prenom_field",
-            false,
-        ) {
+        if champ_mi_largeur(ui, "Prénom *", &mut state.prenom, largeur, "prenom_field", false) {
             ui.memory_mut(|m| m.request_focus(egui::Id::new("matricule_field")));
         }
     });
@@ -142,14 +149,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
             ui.memory_mut(|m| m.request_focus(egui::Id::new("adresse_field")));
         }
         ui.add_space(12.0);
-        if champ_mi_largeur(
-            ui,
-            "Adresse",
-            &mut state.adresse,
-            largeur,
-            "adresse_field",
-            false,
-        ) {
+        if champ_mi_largeur(ui, "Adresse", &mut state.adresse, largeur, "adresse_field", false) {
             ui.memory_mut(|m| m.request_focus(egui::Id::new("telephone_field")));
         }
     });
@@ -169,14 +169,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
             ui.memory_mut(|m| m.request_focus(egui::Id::new("email_field")));
         }
         ui.add_space(12.0);
-        if champ_mi_largeur(
-            ui,
-            "Email",
-            &mut state.email,
-            largeur,
-            "email_field",
-            false,
-        ) {
+        if champ_mi_largeur(ui, "Email", &mut state.email, largeur, "email_field", false) {
             ui.memory_mut(|m| m.request_focus(egui::Id::new("statut_field")));
         }
     });
@@ -185,25 +178,11 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
     ui.horizontal(|ui| {
         let largeur = (ui.available_width() - 12.0) / 2.0;
 
-        if champ_mi_largeur(
-            ui,
-            "Statut",
-            &mut state.statut,
-            largeur,
-            "statut_field",
-            false,
-        ) {
+        if champ_mi_largeur(ui, "Statut", &mut state.statut, largeur, "statut_field", false) {
             ui.memory_mut(|m| m.request_focus(egui::Id::new("grade_field")));
         }
         ui.add_space(12.0);
-        if champ_mi_largeur(
-            ui,
-            "Grade",
-            &mut state.grade,
-            largeur,
-            "grade_field",
-            false,
-        ) {
+        if champ_mi_largeur(ui, "Grade", &mut state.grade, largeur, "grade_field", false) {
             enter_final = true;
         }
     });
@@ -264,6 +243,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
                     state.invalider_cache();
                     state.message = "Personnel supprimé.".into();
                     state.message_ok = true;
+                    state.mutation_effectuee = true;
                 }
             }
         } else {
@@ -277,7 +257,38 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
     }
 }
 
-fn table_droite(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState) {
+struct Colonnes {
+    x: [f32; 6],
+    l: [f32; 6],
+}
+
+impl Colonnes {
+    fn calculer() -> Self {
+        let mut x = [0.0_f32; 6];
+        let l = [
+            COL_MATRICULE,
+            COL_NOM,
+            COL_PRENOM,
+            COL_TELEPHONE,
+            COL_EMAIL,
+            COL_GRADE,
+        ];
+
+        let mut curseur = MARGE;
+        for i in 0..6 {
+            x[i] = curseur;
+            curseur += l[i] + COL_GAP;
+        }
+
+        Self { x, l }
+    }
+
+    fn largeur_totale(&self) -> f32 {
+        self.x[5] + self.l[5] + MARGE
+    }
+}
+
+fn table_droite(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState, largeur: f32) {
     if state.cache.is_none() {
         state.cache = Some(db.get_personnel().unwrap_or_default());
     }
@@ -317,100 +328,164 @@ fn table_droite(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState) {
         return;
     }
 
-    egui::ScrollArea::vertical()
+    let cols = Colonnes::calculer();
+    let largeur_contenu = cols.largeur_totale().max(largeur);
+
+    let mut action: Option<ActionTable> = None;
+
+    egui::ScrollArea::both()
+        .id_source("personnel_table_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            egui::Frame::none()
-                .fill(theme::FOND)
-                .rounding(theme::r_sm())
-                .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        let cols = ["MATRICULE", "NOM", "PRÉNOM", "TÉLÉPHONE", "EMAIL", "GRADE"];
-                        let largs = [90.0, 110.0, 110.0, 130.0, 180.0, 100.0];
-                        for (col, l) in cols.iter().zip(largs.iter()) {
-                            ui.add_sized(
-                                [*l, 20.0],
-                                egui::Label::new(
-                                    egui::RichText::new(*col)
-                                        .size(10.5)
-                                        .color(theme::TEXTE_SECONDAIRE)
-                                        .strong(),
-                                ),
-                            );
-                        }
-                    });
-                });
+            let (rect_entete, _) = ui.allocate_exact_size(
+                egui::vec2(largeur_contenu, HAUTEUR_LIGNE),
+                egui::Sense::hover(),
+            );
+            if ui.is_rect_visible(rect_entete) {
+                let painter = ui.painter();
+                painter.rect_filled(rect_entete, theme::r_sm(), theme::FOND);
+                dessiner_entete(painter, rect_entete, &cols);
+            }
 
             ui.add_space(4.0);
 
-            let mut action: Option<ActionTable> = None;
-
-            for p in &liste {
+            for (i, p) in liste.iter().enumerate() {
                 let est_sel = state.selection_id == Some(p.id);
-                let bg = if est_sel { theme::FOND_BILAN } else { theme::FOND_CARTE };
+                let bg = if est_sel {
+                    theme::FOND_BILAN
+                } else if i % 2 == 0 {
+                    theme::FOND_CARTE
+                } else {
+                    theme::FOND
+                };
 
-                egui::Frame::none()
-                    .fill(bg)
-                    .rounding(theme::r_sm())
-                    .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        let resp = ui.horizontal(|ui| {
-                            let vals = [
-                                p.matricule.as_deref().unwrap_or("-"),
-                                &p.nom,
-                                &p.prenom,
-                                p.telephone.as_deref().unwrap_or("-"),
-                                p.email.as_deref().unwrap_or("-"),
-                                p.grade.as_deref().unwrap_or("-"),
-                            ];
-                            let largs = [90.0, 110.0, 110.0, 130.0, 180.0, 100.0];
-                            for (val, l) in vals.iter().zip(largs.iter()) {
-                                ui.add_sized(
-                                    [*l, 20.0],
-                                    egui::Label::new(
-                                        egui::RichText::new(*val).size(12.0).color(theme::TEXTE),
-                                    ),
-                                );
-                            }
-                        });
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(largeur_contenu, HAUTEUR_LIGNE),
+                    egui::Sense::click(),
+                );
 
-                        let rect = resp.response.rect;
-                        let interact = ui.interact(
-                            rect,
-                            egui::Id::new(format!("row_{}", p.id)),
-                            egui::Sense::click(),
-                        );
+                if ui.is_rect_visible(rect) {
+                    let painter = ui.painter();
+                    painter.rect_filled(rect, theme::r_sm(), bg);
+                    dessiner_ligne(painter, rect, &cols, p);
+                }
 
-                        if interact.clicked() {
-                            if est_sel {
-                                action = Some(ActionTable::Deselectionner);
-                            } else {
-                                action = Some(ActionTable::Selectionner(p.clone()));
-                            }
-                        }
-                        if interact.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                    });
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if resp.clicked() {
+                    if est_sel {
+                        action = Some(ActionTable::Deselectionner);
+                    } else {
+                        action = Some(ActionTable::Selectionner(p.clone()));
+                    }
+                }
 
                 ui.add_space(2.0);
             }
-
-            match action {
-                Some(ActionTable::Selectionner(p)) => {
-                    state.remplir(&p);
-                    state.message.clear();
-                }
-                Some(ActionTable::Deselectionner) => {
-                    state.vider();
-                    state.message.clear();
-                }
-                None => {}
-            }
         });
+
+    match action {
+        Some(ActionTable::Selectionner(p)) => {
+            state.remplir(&p);
+            state.message.clear();
+        }
+        Some(ActionTable::Deselectionner) => {
+            state.vider();
+            state.message.clear();
+        }
+        None => {}
+    }
+}
+
+fn dessiner_entete(painter: &egui::Painter, rect: egui::Rect, cols: &Colonnes) {
+    let titres = [
+        "MATRICULE",
+        "NOM",
+        "PRÉNOM",
+        "TÉLÉPHONE",
+        "EMAIL",
+        "GRADE",
+    ];
+    let font = egui::FontId::proportional(11.0);
+    let couleur = theme::TEXTE_SECONDAIRE;
+
+    for (i, titre) in titres.iter().enumerate() {
+        painter.text(
+            egui::pos2(rect.left() + cols.x[i] + PAD_CELL, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            *titre,
+            font.clone(),
+            couleur,
+        );
+    }
+}
+
+fn dessiner_ligne(painter: &egui::Painter, rect: egui::Rect, cols: &Colonnes, p: &Personnel) {
+    let valeurs = [
+        p.matricule.as_deref().unwrap_or("-").to_string(),
+        p.nom.clone(),
+        p.prenom.clone(),
+        p.telephone.as_deref().unwrap_or("-").to_string(),
+        p.email.as_deref().unwrap_or("-").to_string(),
+        p.grade.as_deref().unwrap_or("-").to_string(),
+    ];
+    let font = egui::FontId::proportional(12.0);
+    let couleur = theme::TEXTE;
+
+    for (i, valeur) in valeurs.iter().enumerate() {
+        let dispo = (cols.l[i] - PAD_CELL * 2.0).max(10.0);
+        let texte = tronquer_au_mot(painter, valeur, &font, couleur, dispo);
+        painter.text(
+            egui::pos2(rect.left() + cols.x[i] + PAD_CELL, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            texte,
+            font.clone(),
+            couleur,
+        );
+    }
+}
+
+fn tronquer_au_mot(
+    painter: &egui::Painter,
+    texte: &str,
+    font: &egui::FontId,
+    couleur: egui::Color32,
+    largeur_dispo: f32,
+) -> String {
+    let mesure = |t: &str| {
+        painter
+            .layout_no_wrap(t.to_string(), font.clone(), couleur)
+            .size()
+            .x
+    };
+
+    if mesure(texte) <= largeur_dispo {
+        return texte.to_string();
+    }
+
+    let mut fin = texte.len();
+    while let Some(idx) = texte[..fin].rfind(' ') {
+        let essai = format!("{}…", texte[..idx].trim_end());
+        if mesure(&essai) <= largeur_dispo {
+            return essai;
+        }
+        if idx == 0 {
+            break;
+        }
+        fin = idx;
+    }
+
+    let mut coupe = texte.to_string();
+    while !coupe.is_empty() {
+        coupe.pop();
+        let essai = format!("{}…", coupe);
+        if mesure(&essai) <= largeur_dispo {
+            return essai;
+        }
+    }
+
+    "…".to_string()
 }
 
 enum ActionTable {
@@ -507,6 +582,7 @@ fn enregistrer(db: &Database, state: &mut PersonnelState, modifier: bool) {
                     state.message_ok = true;
                     state.vider();
                     state.invalider_cache();
+                    state.mutation_effectuee = true;
                 }
                 Err(e) => {
                     state.message = format!("Erreur : {}", e);
@@ -521,6 +597,7 @@ fn enregistrer(db: &Database, state: &mut PersonnelState, modifier: bool) {
                 state.message_ok = true;
                 state.vider();
                 state.invalider_cache();
+                state.mutation_effectuee = true;
             }
             Err(e) => {
                 state.message = format!("Erreur : {}", e);

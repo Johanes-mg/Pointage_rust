@@ -1,27 +1,56 @@
 use crate::database::Database;
 use crate::models::Utilisateur;
 use crate::theme;
-use crate::ui::{accueil, bilan, compte, personnel, pointage, Page};
+use crate::ui::{accueil, bilan, compte, infos, personnel, pointage, Page};
 
 pub struct MainWindowState {
     pub page: Page,
+    pub page_precedente: Option<Page>,
     pub accueil: accueil::AccueilState,
     pub personnel: personnel::PersonnelState,
     pub pointage: pointage::PointageState,
     pub bilan: bilan::BilanState,
     pub compte: compte::CompteState,
+    pub infos: infos::InfosState,
 }
 
 impl MainWindowState {
     pub fn new(_db: &Database, utilisateur: &Utilisateur) -> Self {
         Self {
             page: Page::Accueil,
+            page_precedente: None,
             accueil: accueil::AccueilState::new(),
             personnel: personnel::PersonnelState::new(),
             pointage: pointage::PointageState::new(),
             bilan: bilan::BilanState::new(),
             compte: compte::CompteState::new(utilisateur),
+            infos: infos::InfosState::new(),
         }
+    }
+
+    fn rafraichir_caches(&mut self) {
+        let ancienne = self.page_precedente;
+        let actuelle = self.page;
+
+        if self.personnel.mutation_effectuee {
+            self.pointage.invalider_cache();
+            self.bilan.invalider_cache();
+            self.personnel.mutation_effectuee = false;
+        }
+
+        if actuelle == Page::Pointage && ancienne != Some(Page::Pointage) {
+            self.pointage.invalider_cache();
+        }
+
+        if actuelle == Page::Bilan && ancienne != Some(Page::Bilan) {
+            self.bilan.invalider_cache();
+        }
+
+        if ancienne == Some(Page::Pointage) && actuelle != Page::Pointage {
+            self.bilan.invalider_cache();
+        }
+
+        self.page_precedente = Some(actuelle);
     }
 }
 
@@ -66,6 +95,7 @@ pub fn afficher(
                     ui.add_space(16.0);
 
                     let pages = [
+                        (Page::Infos, "infos.png", "Infos"),
                         (Page::Compte, "compte.png", "Compte"),
                         (Page::Bilan, "bilan.png", "Bilan"),
                         (Page::Pointage, "pointage.png", "Pointage"),
@@ -83,29 +113,41 @@ pub fn afficher(
                         };
 
                         if bouton_nav_image(ui, img, label, fond, hover_fond) {
-                            state.page = page;
+                            if state.page != page {
+                                state.page = page;
+                            }
                         }
                     }
                 });
             });
         });
 
+    state.rafraichir_caches();
+
     egui::CentralPanel::default()
         .frame(egui::Frame::none().fill(theme::FOND))
         .show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    egui::Frame::none()
-                        .inner_margin(egui::Margin::symmetric(30.0, 20.0))
-                        .show(ui, |ui| match state.page {
+            let page = state.page;
+            let marge = egui::Margin::symmetric(30.0, 20.0);
+
+            egui::Frame::none().inner_margin(marge).show(ui, |ui| {
+                if page == Page::Bilan {
+                    bilan::afficher(ui, db, &mut state.bilan);
+                } else {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match page {
                             Page::Accueil => accueil::afficher(ui, db, &mut state.accueil),
                             Page::Personnel => personnel::afficher(ui, db, &mut state.personnel),
                             Page::Pointage => pointage::afficher(ui, db, &mut state.pointage),
-                            Page::Bilan => bilan::afficher(ui, db, &mut state.bilan),
-                            Page::Compte => compte::afficher(ui, db, utilisateur, &mut state.compte),
+                            Page::Bilan => {}
+                            Page::Compte => {
+                                compte::afficher(ui, db, utilisateur, &mut state.compte)
+                            }
+                            Page::Infos => infos::afficher(ui, &mut state.infos),
                         });
-                });
+                }
+            });
         });
 
     action

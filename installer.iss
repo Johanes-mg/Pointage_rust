@@ -26,6 +26,11 @@ DisableReadyPage=no
 UsePreviousAppDir=yes
 AllowUNCPath=no
 ChangesEnvironment=no
+VersionInfoVersion=2.2.0
+VersionInfoCompany=Johanes-mg
+VersionInfoDescription=Pointage 2.2.0 - Installation
+VersionInfoProductName=Pointage
+VersionInfoProductVersion=2.2.0
 
 [Languages]
 Name: "french"; MessagesFile: "compiler:Languages\French.isl"
@@ -34,7 +39,7 @@ Name: "french"; MessagesFile: "compiler:Languages\French.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "dist\pointage.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "target\x86_64-pc-windows-gnullvm\release\pointage.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Images\*.png"; DestDir: "{app}\Images"; Flags: ignoreversion
 Source: "Images\*.ico"; DestDir: "{app}\Images"; Flags: ignoreversion
 

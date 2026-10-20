@@ -20,6 +20,8 @@ pub fn exporter_tout(
     };
     let chemin = dossier.join(format!("pointage_{}.xlsx", periode));
 
+    let snapshot = db.exporter_snapshot(debut, fin)?;
+
     let mut wb = Workbook::new();
 
     let entete = Format::new()
@@ -40,7 +42,7 @@ pub fn exporter_tout(
         ws.write_with_format(0, i as u16, *h, &entete)
             .map_err(|e| e.to_string())?;
     }
-    for (i, p) in db.get_personnel()?.iter().enumerate() {
+    for (i, p) in snapshot.personnel.iter().enumerate() {
         let r = (i + 1) as u32;
         ws.write(r, 0, p.matricule.as_deref().unwrap_or("")).ok();
         ws.write(r, 1, &p.nom).ok();
@@ -54,7 +56,6 @@ pub fn exporter_tout(
     }
     ws.autofit();
 
-    let pointages = db.get_pointages_periode(debut, fin)?;
     let ws = wb.add_worksheet();
     ws.set_name("Pointages").map_err(|e| e.to_string())?;
     let headers = [
@@ -73,7 +74,7 @@ pub fn exporter_tout(
         ws.write_with_format(0, i as u16, *h, &entete)
             .map_err(|e| e.to_string())?;
     }
-    for (i, pt) in pointages.iter().enumerate() {
+    for (i, pt) in snapshot.pointages.iter().enumerate() {
         let r = (i + 1) as u32;
         let (n, p) = split_nom(pt);
         ws.write(r, 0, "").ok();
@@ -104,7 +105,7 @@ pub fn exporter_tout(
         ws.write_with_format(0, i as u16, *h, &entete)
             .map_err(|e| e.to_string())?;
     }
-    for (i, b) in db.get_bilan_personnel(debut, fin)?.iter().enumerate() {
+    for (i, b) in snapshot.bilan.iter().enumerate() {
         let r = (i + 1) as u32;
         ws.write(r, 0, &b.nom).ok();
         ws.write(r, 1, b.jours_presents).ok();
@@ -118,7 +119,7 @@ pub fn exporter_tout(
     let ws = wb.add_worksheet();
     ws.set_name("Periode").map_err(|e| e.to_string())?;
     ws.write(0, 0, "Service").ok();
-    ws.write(0, 1, db.get_nom_entreprise()).ok();
+    ws.write(0, 1, &snapshot.nom_entreprise).ok();
     ws.write(1, 0, "Du").ok();
     ws.write(1, 1, debut.format("%d/%m/%Y").to_string()).ok();
     ws.write(2, 0, "Au").ok();

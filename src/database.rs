@@ -13,6 +13,13 @@ pub struct Database {
     chemin_actif: RefCell<Option<PathBuf>>,
 }
 
+pub struct ExportSnapshot {
+    pub personnel: Vec<Personnel>,
+    pub pointages: Vec<EnregistrementPointage>,
+    pub bilan: Vec<BilanPersonnel>,
+    pub nom_entreprise: String,
+}
+
 impl Database {
     pub fn new() -> Result<Self, String> {
         let base = directories::ProjectDirs::from("mg", "Johanes", "Pointage")
@@ -239,7 +246,6 @@ impl Database {
             }
         }
 
-        // Ajout de la table JourFerie si elle n'existe pas (migration douce)
         let ferie_existe: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='JourFerie'",
@@ -455,31 +461,33 @@ impl Database {
     }
 
     pub fn get_personnel(&self) -> Result<Vec<Personnel>, String> {
-        self.with_conn(|conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale
-                     FROM Personnel ORDER BY Nom, Prenom",
-                )
-                .map_err(|e| e.to_string())?;
-            let iter = stmt
-                .query_map([], |r| {
-                    Ok(Personnel {
-                        id: r.get(0)?,
-                        nom: r.get(1)?,
-                        prenom: r.get(2)?,
-                        matricule: r.get(3)?,
-                        telephone: r.get(4)?,
-                        adresse: r.get(5)?,
-                        email: r.get(6)?,
-                        statut: r.get(7)?,
-                        grade: r.get(8)?,
-                        situation_familiale: r.get(9)?,
-                    })
+        self.with_conn(|conn| Self::query_personnel(conn))
+    }
+
+    fn query_personnel(conn: &Connection) -> Result<Vec<Personnel>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale
+                 FROM Personnel ORDER BY Nom, Prenom",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map([], |r| {
+                Ok(Personnel {
+                    id: r.get(0)?,
+                    nom: r.get(1)?,
+                    prenom: r.get(2)?,
+                    matricule: r.get(3)?,
+                    telephone: r.get(4)?,
+                    adresse: r.get(5)?,
+                    email: r.get(6)?,
+                    statut: r.get(7)?,
+                    grade: r.get(8)?,
+                    situation_familiale: r.get(9)?,
                 })
-                .map_err(|e| e.to_string())?;
-            iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
-        })
+            })
+            .map_err(|e| e.to_string())?;
+        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
     pub fn ajouter_personnel(&self, p: &Personnel) -> Result<i64, String> {
@@ -575,23 +583,29 @@ impl Database {
         debut: NaiveDate,
         fin: NaiveDate,
     ) -> Result<Vec<EnregistrementPointage>, String> {
-        self.with_conn(|conn| {
-            let sql = format!(
-                "{} WHERE ep.DatePointage BETWEEN ?1 AND ?2 ORDER BY ep.DatePointage DESC, p.Nom, p.Prenom",
-                Self::SELECT_POINTAGE
-            );
-            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-            let iter = stmt
-                .query_map(
-                    params![
-                        debut.format("%Y-%m-%d").to_string(),
-                        fin.format("%Y-%m-%d").to_string()
-                    ],
-                    Self::lire_pointage,
-                )
-                .map_err(|e| e.to_string())?;
-            iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
-        })
+        self.with_conn(|conn| Self::query_pointages_periode(conn, debut, fin))
+    }
+
+    fn query_pointages_periode(
+        conn: &Connection,
+        debut: NaiveDate,
+        fin: NaiveDate,
+    ) -> Result<Vec<EnregistrementPointage>, String> {
+        let sql = format!(
+            "{} WHERE ep.DatePointage BETWEEN ?1 AND ?2 ORDER BY ep.DatePointage DESC, p.Nom, p.Prenom",
+            Self::SELECT_POINTAGE
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(
+                params![
+                    debut.format("%Y-%m-%d").to_string(),
+                    fin.format("%Y-%m-%d").to_string()
+                ],
+                Self::lire_pointage,
+            )
+            .map_err(|e| e.to_string())?;
+        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
     pub fn enregistrer_pointage(
@@ -653,6 +667,8 @@ impl Database {
                     "SELECT CAST(strftime('%d', DatePointage) AS INTEGER) AS Jour, COUNT(*)
                      FROM EnregistrementPointage
                      WHERE strftime('%Y', DatePointage) = ?1 AND strftime('%m', DatePointage) = ?2
+                       AND (MatinArrivee IS NOT NULL OR MatinSortie IS NOT NULL
+                            OR ApresMidiArrivee IS NOT NULL OR ApresMidiSortie IS NOT NULL)
                      GROUP BY Jour",
                 )
                 .map_err(|e| e.to_string())?;
@@ -684,7 +700,9 @@ impl Database {
                      FROM EnregistrementPointage
                      WHERE PersonnelId = ?1
                        AND strftime('%Y', DatePointage) = ?2
-                       AND strftime('%m', DatePointage) = ?3",
+                       AND strftime('%m', DatePointage) = ?3
+                       AND (MatinArrivee IS NOT NULL OR MatinSortie IS NOT NULL
+                            OR ApresMidiArrivee IS NOT NULL OR ApresMidiSortie IS NOT NULL)",
                 )
                 .map_err(|e| e.to_string())?;
             let iter = stmt
@@ -705,10 +723,6 @@ impl Database {
         })
     }
 
-    // ==================== JOURS FÉRIÉS ====================
-
-    /// Renvoie, pour un mois donné, la map { jour_du_mois -> liste de périodes }.
-    /// `Periode` peut contenir `jour`, `matin`, `aprem`.
     pub fn get_jours_feries_du_mois(
         &self,
         annee: i32,
@@ -739,9 +753,6 @@ impl Database {
         })
     }
 
-    /// Renvoie la période fériée d'une date donnée : `Some("jour")`,
-    /// `Some("matin")`, `Some("aprem")` ou `None`.
-    /// Si plusieurs périodes existent, `jour` prime, sinon la première trouvée.
     pub fn get_ferie_jour(&self, date: NaiveDate) -> Result<Option<String>, String> {
         self.with_conn(|conn| {
             let date_str = date.format("%Y-%m-%d").to_string();
@@ -765,7 +776,6 @@ impl Database {
         })
     }
 
-    /// Active ou désactive une période fériée pour une date.
     pub fn set_ferie(
         &self,
         date: NaiveDate,
@@ -791,7 +801,6 @@ impl Database {
         })
     }
 
-    /// Retire toutes les périodes fériées d'une date.
     pub fn clear_ferie_jour(&self, date: NaiveDate) -> Result<(), String> {
         self.with_conn(|conn| {
             conn.execute(
@@ -803,68 +812,102 @@ impl Database {
         })
     }
 
-    // ==================== BILAN ====================
-
-    pub fn get_bilan_personnel(
-        &self,
+    fn query_bilan(
+        conn: &Connection,
         debut: NaiveDate,
         fin: NaiveDate,
     ) -> Result<Vec<BilanPersonnel>, String> {
-        self.with_conn(|conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT p.Nom, p.Prenom,
-                            COUNT(ep.Id) AS JoursPresents,
-                            SUM(CASE WHEN ep.MatinArrivee IS NOT NULL OR ep.MatinSortie IS NOT NULL THEN 1 ELSE 0 END),
-                            SUM(CASE WHEN ep.ApresMidiArrivee IS NOT NULL OR ep.ApresMidiSortie IS NOT NULL THEN 1 ELSE 0 END),
-                            SUM(
-                              COALESCE((strftime('%s', ep.MatinSortie) - strftime('%s', ep.MatinArrivee)), 0)
-                              + COALESCE((strftime('%s', ep.ApresMidiSortie) - strftime('%s', ep.ApresMidiArrivee)), 0)
-                            ),
-                            AVG(strftime('%s', ep.MatinArrivee))
-                     FROM Personnel p
-                     LEFT JOIN EnregistrementPointage ep
-                         ON ep.PersonnelId = p.Id AND ep.DatePointage BETWEEN ?1 AND ?2
-                     GROUP BY p.Id, p.Nom, p.Prenom
-                     ORDER BY p.Nom, p.Prenom",
-                )
-                .map_err(|e| e.to_string())?;
-            let iter = stmt
-                .query_map(
-                    params![
-                        debut.format("%Y-%m-%d").to_string(),
-                        fin.format("%Y-%m-%d").to_string()
-                    ],
-                    |r| {
-                        let sec_total: Option<f64> = r.get(5).ok();
-                        let moy: Option<f64> = r.get(6).ok();
-                        let total_heures = sec_total
-                            .map(|s| {
-                                let h = (s / 3600.0) as i64;
-                                let m = ((s % 3600.0) / 60.0) as i64;
-                                format!("{}h{:02}", h, m)
-                            })
-                            .unwrap_or_else(|| "-".into());
-                        let moyenne_arrivee = moy
-                            .map(|s| {
-                                let t = s as i64 % 86400;
-                                format!("{:02}:{:02}", t / 3600, (t % 3600) / 60)
-                            })
-                            .unwrap_or_else(|| "-".into());
-                        Ok(BilanPersonnel {
-                            nom: format!("{} {}", r.get::<_, String>(0)?, r.get::<_, String>(1)?)
-                                .trim()
-                                .to_string(),
-                            jours_presents: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                            matins_presents: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                            apres_midis_presents: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                            total_heures,
-                            moyenne_arrivee,
+        let mut stmt = conn
+            .prepare(
+                "SELECT p.Nom, p.Prenom,
+                        COUNT(ep.Id) AS JoursPresents,
+                        SUM(CASE WHEN ep.MatinArrivee IS NOT NULL OR ep.MatinSortie IS NOT NULL THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN ep.ApresMidiArrivee IS NOT NULL OR ep.ApresMidiSortie IS NOT NULL THEN 1 ELSE 0 END),
+                        SUM(
+                          COALESCE((strftime('%s', ep.MatinSortie) - strftime('%s', ep.MatinArrivee)), 0)
+                          + COALESCE((strftime('%s', ep.ApresMidiSortie) - strftime('%s', ep.ApresMidiArrivee)), 0)
+                        ),
+                        AVG(strftime('%s', ep.MatinArrivee))
+                 FROM Personnel p
+                 LEFT JOIN EnregistrementPointage ep
+                     ON ep.PersonnelId = p.Id AND ep.DatePointage BETWEEN ?1 AND ?2
+                 GROUP BY p.Id, p.Nom, p.Prenom
+                 ORDER BY p.Nom, p.Prenom",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(
+                params![
+                    debut.format("%Y-%m-%d").to_string(),
+                    fin.format("%Y-%m-%d").to_string()
+                ],
+                |r| {
+                    let sec_total: Option<f64> = r.get(5).ok();
+                    let moy: Option<f64> = r.get(6).ok();
+                    let total_heures = sec_total
+                        .map(|s| {
+                            let h = (s / 3600.0) as i64;
+                            let m = ((s % 3600.0) / 60.0) as i64;
+                            format!("{}h{:02}", h, m)
                         })
-                    },
-                )
-                .map_err(|e| e.to_string())?;
-            iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+                        .unwrap_or_else(|| "-".into());
+                    let moyenne_arrivee = moy
+                        .map(|s| {
+                            let t = s as i64 % 86400;
+                            format!("{:02}:{:02}", t / 3600, (t % 3600) / 60)
+                        })
+                        .unwrap_or_else(|| "-".into());
+                    Ok(BilanPersonnel {
+                        nom: format!("{} {}", r.get::<_, String>(0)?, r.get::<_, String>(1)?)
+                            .trim()
+                            .to_string(),
+                        jours_presents: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                        matins_presents: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                        apres_midis_presents: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                        total_heures,
+                        moyenne_arrivee,
+                    })
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn exporter_snapshot(
+        &self,
+        debut: NaiveDate,
+        fin: NaiveDate,
+    ) -> Result<ExportSnapshot, String> {
+        self.with_conn(|conn| {
+            conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+            let resultat = (|| -> Result<ExportSnapshot, String> {
+                let personnel = Self::query_personnel(conn)?;
+                let pointages = Self::query_pointages_periode(conn, debut, fin)?;
+                let bilan = Self::query_bilan(conn, debut, fin)?;
+                let nom_entreprise = conn
+                    .query_row(
+                        "SELECT Valeur FROM Parametre WHERE Cle='NomEntreprise'",
+                        [],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .unwrap_or_else(|_| "Pointage".into());
+                Ok(ExportSnapshot {
+                    personnel,
+                    pointages,
+                    bilan,
+                    nom_entreprise,
+                })
+            })();
+            match resultat {
+                Ok(snap) => {
+                    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+                    Ok(snap)
+                }
+                Err(e) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    Err(e)
+                }
+            }
         })
     }
 
@@ -895,22 +938,40 @@ impl Database {
             return Err(format!("Fichier source introuvable : {}", source));
         }
 
-        let verif = Connection::open(&source_path).map_err(|e| {
+        let source_canon = std::fs::canonicalize(&source_path).map_err(|e| e.to_string())?;
+        let actif_canon = if chemin.exists() {
+            std::fs::canonicalize(&chemin).map_err(|e| e.to_string())?
+        } else {
+            chemin.clone()
+        };
+
+        if source_canon == actif_canon {
+            return Err("Impossible d'importer la base active sur elle-même.".into());
+        }
+
+        let verif = Connection::open(&source_canon).map_err(|e| {
             format!(
                 "Impossible d'ouvrir le fichier a importer (corrompu ?) : {}",
                 e
             )
         })?;
-        let table_ok: i64 = verif
+
+        let tables_ok: i64 = verif
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Personnel'",
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type='table'
+                   AND name IN ('Personnel','EnregistrementPointage','Utilisateur','JourFerie')",
                 [],
                 |r| r.get(0),
             )
             .unwrap_or(0);
         drop(verif);
-        if table_ok == 0 {
-            return Err("Le fichier selectionne n'est pas une base Pointage valide.".into());
+
+        if tables_ok < 4 {
+            return Err(
+                "Le fichier selectionne n'est pas une base Pointage valide (tables manquantes)."
+                    .into(),
+            );
         }
 
         let horodatage = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
@@ -945,23 +1006,11 @@ impl Database {
             }
         }
 
-        std::fs::copy(&source_path, &chemin).map_err(|e| e.to_string())?;
+        std::fs::copy(&source_canon, &chemin).map_err(|e| e.to_string())?;
 
         if let Some(u) = utilisateur {
             self.ouvrir_session(&u)?;
         }
         Ok(())
-    }
-
-    pub fn get_nom_entreprise(&self) -> String {
-        self.with_conn(|conn| {
-            conn.query_row(
-                "SELECT Valeur FROM Parametre WHERE Cle='NomEntreprise'",
-                [],
-                |r| r.get::<_, String>(0),
-            )
-            .map_err(|e| e.to_string())
-        })
-        .unwrap_or_else(|_| "Pointage".into())
     }
 }

@@ -25,6 +25,7 @@ pub struct PointageState {
     pub stats_mois: HashMap<u32, i64>,
     pub feries_mois: HashMap<u32, Vec<String>>,
     pub ferie_jour: Option<String>,
+    pub cache_ferie_date: Option<NaiveDate>,
     pub brouillons: HashMap<i64, PointageEnCours>,
     pub rafraichir: bool,
 }
@@ -42,12 +43,12 @@ impl PointageState {
             stats_mois: HashMap::new(),
             feries_mois: HashMap::new(),
             ferie_jour: None,
+            cache_ferie_date: None,
             brouillons: HashMap::new(),
             rafraichir: true,
         }
     }
 
-    #[allow(dead_code)]
     pub fn invalider_cache(&mut self) {
         self.cache_personnel = None;
         self.cache_date_pointages = None;
@@ -56,6 +57,7 @@ impl PointageState {
         self.stats_mois.clear();
         self.feries_mois.clear();
         self.ferie_jour = None;
+        self.cache_ferie_date = None;
         self.brouillons.clear();
         self.rafraichir = true;
     }
@@ -110,51 +112,112 @@ fn charger_stats_mois(db: &Database, state: &mut PointageState) {
 }
 
 fn charger_ferie_jour(db: &Database, state: &mut PointageState) {
-    state.ferie_jour = db.get_ferie_jour(state.date_selectionnee).unwrap_or(None);
+    if state.cache_ferie_date != Some(state.date_selectionnee) {
+        state.ferie_jour = db.get_ferie_jour(state.date_selectionnee).unwrap_or(None);
+        state.cache_ferie_date = Some(state.date_selectionnee);
+    }
 }
 
 fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
-    if state.cache_date_pointages != Some(state.date_selectionnee) || state.rafraichir {
-        let pointages = db
-            .get_pointages_du_jour(state.date_selectionnee)
-            .unwrap_or_default();
-        state.pointages_jour = pointages.iter().map(|p| p.personnel_id).collect();
+    let date_changee = state.cache_date_pointages != Some(state.date_selectionnee);
 
-        state.brouillons.clear();
+    if !date_changee {
         if let Some(personnes) = state.cache_personnel.clone() {
             for p in &personnes {
-                if let Some(e) = pointages.iter().find(|pt| pt.personnel_id == p.id) {
-                    state.brouillons.insert(
-                        p.id,
-                        PointageEnCours {
-                            coche_matin: e.matin_arrivee.is_some() || e.matin_sortie.is_some(),
-                            matin_arr: e.matin_arrivee,
-                            matin_sort: e.matin_sortie,
-                            coche_aprem: e.apres_midi_arrivee.is_some()
-                                || e.apres_midi_sortie.is_some(),
-                            aprem_arr: e.apres_midi_arrivee,
-                            aprem_sort: e.apres_midi_sortie,
-                            observation: e.observation.clone().unwrap_or_default(),
-                        },
-                    );
-                } else {
-                    state.brouillons.insert(p.id, PointageEnCours::default());
-                }
+                state
+                    .brouillons
+                    .entry(p.id)
+                    .or_insert_with(PointageEnCours::default);
             }
         }
-        state.cache_date_pointages = Some(state.date_selectionnee);
-        state.rafraichir = false;
+        return;
+    }
+
+    let pointages = db
+        .get_pointages_du_jour(state.date_selectionnee)
+        .unwrap_or_default();
+
+    state.pointages_jour = pointages
+        .iter()
+        .filter(|pt| {
+            pt.matin_arrivee.is_some()
+                || pt.matin_sortie.is_some()
+                || pt.apres_midi_arrivee.is_some()
+                || pt.apres_midi_sortie.is_some()
+        })
+        .map(|p| p.personnel_id)
+        .collect();
+
+    state.brouillons.clear();
+    if let Some(personnes) = state.cache_personnel.clone() {
+        for p in &personnes {
+            if let Some(e) = pointages.iter().find(|pt| pt.personnel_id == p.id) {
+                let matin_ok = e.matin_arrivee.is_some() || e.matin_sortie.is_some();
+                let aprem_ok = e.apres_midi_arrivee.is_some() || e.apres_midi_sortie.is_some();
+                state.brouillons.insert(
+                    p.id,
+                    PointageEnCours {
+                        coche_matin: matin_ok,
+                        matin_arr: e.matin_arrivee,
+                        matin_sort: e.matin_sortie,
+                        coche_aprem: aprem_ok,
+                        aprem_arr: e.apres_midi_arrivee,
+                        aprem_sort: e.apres_midi_sortie,
+                        observation: e.observation.clone().unwrap_or_default(),
+                    },
+                );
+            } else {
+                state.brouillons.insert(p.id, PointageEnCours::default());
+            }
+        }
+    }
+    state.cache_date_pointages = Some(state.date_selectionnee);
+    state.rafraichir = false;
+}
+
+fn prochaine_periode(courante: Option<&str>) -> Option<&'static str> {
+    match courante {
+        None => Some("jour"),
+        Some("jour") => Some("matin"),
+        Some("matin") => Some("aprem"),
+        Some("aprem") => None,
+        _ => Some("jour"),
     }
 }
 
-fn periode_suivante(courante: Option<&str>) -> (Option<&'static str>, &'static str) {
+fn libelle_bouton_ferie(courante: Option<&str>) -> &'static str {
     match courante {
-        None => (Some("jour"), "Marquer férié (jour)"),
-        Some("jour") => (Some("matin"), "Férié → Matin"),
-        Some("matin") => (Some("aprem"), "Férié → Après-midi"),
-        Some("aprem") => (None, "Retirer férié"),
-        _ => (Some("jour"), "Marquer férié (jour)"),
+        None => "Marquer férié (jour)",
+        Some("jour") => "Férié -> Matin",
+        Some("matin") => "Férié -> Après-midi",
+        Some("aprem") => "Retirer férié",
+        _ => "Marquer férié (jour)",
     }
+}
+
+fn appliquer_transition_ferie(
+    db: &Database,
+    date: NaiveDate,
+    courante: Option<&str>,
+) -> Option<String> {
+    let _ = match courante {
+        Some("jour") => {
+            db.set_ferie(date, "jour", false).ok();
+            db.set_ferie(date, "matin", true).ok();
+        }
+        Some("matin") => {
+            db.set_ferie(date, "matin", false).ok();
+            db.set_ferie(date, "aprem", true).ok();
+        }
+        Some("aprem") => {
+            db.clear_ferie_jour(date).ok();
+        }
+        None => {
+            db.set_ferie(date, "jour", true).ok();
+        }
+        _ => {}
+    };
+    prochaine_periode(courante).map(|s| s.to_string())
 }
 
 fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
@@ -218,6 +281,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
             state.mois_affiche = NaiveDate::from_ymd_opt(t.year(), t.month(), 1).unwrap();
             if state.date_selectionnee != t {
                 state.date_selectionnee = t;
+                state.cache_ferie_date = None;
                 state.rafraichir = true;
             }
         }
@@ -309,7 +373,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                     } else if est_ferie {
                         (theme::WARNING, egui::Color32::WHITE, theme::WARNING)
                     } else if est_ferie_matin || est_ferie_aprem {
-                        (theme::JOUR_MOYEN_BG, theme::WARNING, theme::WARNING)
+                        (theme::FERIE_DEMI_BG, theme::WARNING, theme::WARNING)
                     } else if pointe {
                         (theme::JOUR_BIEN_BG, theme::SUCCES, theme::SUCCES)
                     } else if est_aujourdhui {
@@ -318,19 +382,13 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                         (theme::FOND, theme::PRIMAIRE, theme::BORDURE)
                     };
 
-                    let (rect, resp) = ui.allocate_exact_size(
-                        egui::vec2(largeur_case, 46.0),
-                        egui::Sense::click(),
-                    );
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(largeur_case, 46.0), egui::Sense::click());
 
                     if ui.is_rect_visible(rect) {
                         let painter = ui.painter();
                         painter.rect_filled(rect, theme::r_sm(), fond);
-                        painter.rect_stroke(
-                            rect,
-                            theme::r_sm(),
-                            egui::Stroke::new(1.0_f32, bordure),
-                        );
+                        painter.rect_stroke(rect, theme::r_sm(), egui::Stroke::new(1.0_f32, bordure));
                         painter.text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
@@ -342,7 +400,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                             painter.text(
                                 egui::pos2(rect.right() - 6.0, rect.top() + 4.0),
                                 egui::Align2::RIGHT_TOP,
-                                "•",
+                                ".",
                                 egui::FontId::proportional(11.0),
                                 theme::WARNING,
                             );
@@ -362,75 +420,68 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
 
         if let Some(d) = nouvelle_date {
             state.date_selectionnee = d;
+            state.cache_ferie_date = None;
             state.rafraichir = true;
         }
 
         ui.add_space(12.0);
         theme::separateur(ui);
-        ui.add_space(8.0);
+        ui.add_space(12.0);
 
-        let courante = state.ferie_jour.as_deref();
-        let (_, libelle) = periode_suivante(courante);
+        // ----- Bloc "Jour férié" encadré -----
+        egui::Frame::none()
+            .fill(theme::FOND)
+            .rounding(theme::r_md())
+            .stroke(egui::Stroke::new(1.0_f32, theme::BORDURE))
+            .inner_margin(egui::Margin::symmetric(14.0, 12.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
 
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Jour férié :")
-                    .size(12.0)
-                    .color(theme::TEXTE_SECONDAIRE)
-                    .strong(),
-            );
-            let statut = match courante {
-                Some("jour") => "Jour entier",
-                Some("matin") => "Matin",
-                Some("aprem") => "Après-midi",
-                _ => "Aucun",
-            };
-            ui.label(
-                egui::RichText::new(statut)
-                    .size(12.0)
-                    .color(if courante.is_some() {
-                        theme::WARNING
-                    } else {
-                        theme::TEXTE_SECONDAIRE
-                    })
-                    .strong(),
-            );
-        });
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Jour férié :")
+                            .size(12.0)
+                            .color(theme::TEXTE_SECONDAIRE)
+                            .strong(),
+                    );
+                    let statut = match state.ferie_jour.as_deref() {
+                        Some("jour") => "Jour entier",
+                        Some("matin") => "Matin",
+                        Some("aprem") => "Après-midi",
+                        _ => "Aucun",
+                    };
+                    ui.label(
+                        egui::RichText::new(statut)
+                            .size(12.0)
+                            .color(if state.ferie_jour.is_some() {
+                                theme::WARNING
+                            } else {
+                                theme::TEXTE_SECONDAIRE
+                            })
+                            .strong(),
+                    );
+                });
 
-        ui.add_space(6.0);
+                ui.add_space(8.0);
 
-        let bouton = if theme::image(ui.ctx(), "ferier.png").is_some() {
-            theme::bouton_image_texte(ui, "ferier.png", libelle, 220.0, 38.0)
-        } else {
-            theme::bouton_secondaire(ui, libelle, 220.0)
-        };
+                let libelle = libelle_bouton_ferie(state.ferie_jour.as_deref());
 
-        if bouton {
-            let nouvelle = match courante {
-                Some("jour") => {
-                    let _ = db.set_ferie(state.date_selectionnee, "jour", false);
-                    let _ = db.set_ferie(state.date_selectionnee, "matin", true);
-                    Some("matin".to_string())
+                let bouton = if theme::image(ui.ctx(), "ferier.png").is_some() {
+                    theme::bouton_image_texte(ui, "ferier.png", libelle, 240.0, 38.0)
+                } else {
+                    theme::bouton_secondaire(ui, libelle, 240.0)
+                };
+
+                if bouton {
+                    let courante = state.ferie_jour.as_deref();
+                    let nouvelle =
+                        appliquer_transition_ferie(db, state.date_selectionnee, courante);
+                    state.ferie_jour = nouvelle;
+                    state.cache_mois = None;
+                    state.cache_ferie_date = Some(state.date_selectionnee);
+                    state.rafraichir = true;
                 }
-                Some("matin") => {
-                    let _ = db.set_ferie(state.date_selectionnee, "matin", false);
-                    let _ = db.set_ferie(state.date_selectionnee, "aprem", true);
-                    Some("aprem".to_string())
-                }
-                Some("aprem") => {
-                    let _ = db.clear_ferie_jour(state.date_selectionnee);
-                    None
-                }
-                None => {
-                    let _ = db.set_ferie(state.date_selectionnee, "jour", true);
-                    Some("jour".to_string())
-                }
-                _ => None,
-            };
-            state.ferie_jour = nouvelle;
-            state.cache_mois = None;
-            state.rafraichir = true;
-        }
+            });
     });
 }
 
@@ -536,6 +587,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                 ui.add_space(30.0);
             });
         });
+        state.rafraichir = false;
         return;
     }
 
@@ -543,6 +595,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
     let mut action_enregistrer: Option<i64> = None;
 
     egui::ScrollArea::vertical()
+        .id_source("pointage_employes_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for p in &personnes {
@@ -571,9 +624,13 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                         ui.add_space(10.0);
 
                         if let Some(b) = state.brouillons.get_mut(&p.id) {
+                            let id_matin = format!("matin_{}", p.id);
+                            let id_aprem = format!("aprem_{}", p.id);
+
                             ui.columns(2, |cols| {
                                 bloc_plage(
                                     &mut cols[0],
+                                    &id_matin,
                                     "MATIN",
                                     &mut b.coche_matin,
                                     &mut b.matin_arr,
@@ -583,6 +640,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                                 );
                                 bloc_plage(
                                     &mut cols[1],
+                                    &id_aprem,
                                     "APRÈS-MIDI",
                                     &mut b.coche_aprem,
                                     &mut b.aprem_arr,
@@ -601,13 +659,19 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                                         .color(theme::TEXTE_SECONDAIRE)
                                         .strong(),
                                 );
+                                let id_obs = egui::Id::new(format!("obs_{}", p.id));
                                 ui.add(
                                     egui::TextEdit::singleline(&mut b.observation)
+                                        .id(id_obs)
                                         .desired_width((ui.available_width() - 90.0).max(100.0))
                                         .margin(egui::vec2(10.0, 8.0)),
                                 );
 
-                                let prete_a_enregistrer = b.coche_matin || b.coche_aprem;
+                                let rien_a_sauver = !b.coche_matin
+                                    && !b.coche_aprem
+                                    && b.observation.trim().is_empty();
+
+                                let bouton_actif = est_pointe || !rien_a_sauver;
 
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -617,8 +681,6 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                                         } else {
                                             "enregistrer.png"
                                         };
-
-                                        let bouton_actif = est_pointe || prete_a_enregistrer;
 
                                         let clic = if bouton_actif {
                                             theme::bouton_image_seule(ui, img, 56.0, 30.0)
@@ -644,10 +706,15 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
             }
         });
 
+    state.rafraichir = false;
+
     if let Some(id) = action_supprimer {
         let _ = db.supprimer_pointage(id, state.date_selectionnee);
-        state.rafraichir = true;
+        state.pointages_jour.retain(|x| *x != id);
         state.cache_mois = None;
+        // Invalide le cache jour pour forcer un rechargement depuis la base
+        state.cache_date_pointages = None;
+        state.brouillons.remove(&id);
     }
 
     if let Some(id) = action_enregistrer {
@@ -662,9 +729,22 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                 Some(b.observation.trim().to_string())
             };
 
-            let _ = db.enregistrer_pointage(id, state.date_selectionnee, ma, ms, aa, as_, obs);
-            state.rafraichir = true;
+            let vide =
+                ma.is_none() && ms.is_none() && aa.is_none() && as_.is_none() && obs.is_none();
+
+            if vide {
+                let _ = db.supprimer_pointage(id, state.date_selectionnee);
+                state.pointages_jour.retain(|x| *x != id);
+            } else {
+                let _ = db.enregistrer_pointage(id, state.date_selectionnee, ma, ms, aa, as_, obs);
+                if !state.pointages_jour.contains(&id) {
+                    state.pointages_jour.push(id);
+                }
+            }
             state.cache_mois = None;
+            // Invalide le cache jour pour forcer un rechargement depuis la base
+            state.cache_date_pointages = None;
+            state.brouillons.remove(&id);
         }
     }
 }
@@ -700,6 +780,7 @@ fn bouton_image_seule_desactive(
 
 fn bloc_plage(
     ui: &mut egui::Ui,
+    id_unique: &str,
     titre: &str,
     coche: &mut bool,
     arrivee: &mut Option<NaiveTime>,
@@ -707,125 +788,127 @@ fn bloc_plage(
     h_defaut_arr: u32,
     h_defaut_sort: u32,
 ) {
-    let fond = if titre == "MATIN" {
-        egui::Color32::from_rgb(245, 250, 255)
-    } else {
-        egui::Color32::from_rgb(255, 250, 245)
-    };
+    ui.push_id(id_unique, |ui| {
+        let fond = if titre == "MATIN" {
+            egui::Color32::from_rgb(245, 250, 255)
+        } else {
+            egui::Color32::from_rgb(255, 250, 245)
+        };
 
-    egui::Frame::none()
-        .fill(fond)
-        .rounding(theme::r_md())
-        .inner_margin(egui::Margin::same(12.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+        egui::Frame::none()
+            .fill(fond)
+            .rounding(theme::r_md())
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
 
-            let coche_avant = *coche;
+                let coche_avant = *coche;
 
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(titre)
-                        .size(11.5)
-                        .color(theme::PRIMAIRE)
-                        .strong(),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.checkbox(coche, "Pointer");
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(titre)
+                            .size(11.5)
+                            .color(theme::PRIMAIRE)
+                            .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.checkbox(coche, "Pointer");
+                    });
+                });
+
+                let coche_apres = *coche;
+
+                if coche_apres && !coche_avant {
+                    if arrivee.is_none() {
+                        *arrivee = NaiveTime::from_hms_opt(h_defaut_arr, 0, 0);
+                    }
+                    if sortie.is_none() {
+                        *sortie = NaiveTime::from_hms_opt(h_defaut_sort, 0, 0);
+                    }
+                }
+
+                if !coche_apres && coche_avant {
+                    *arrivee = None;
+                    *sortie = None;
+                }
+
+                ui.add_space(8.0);
+
+                let h_init_arr = arrivee.map(|t| t.hour()).unwrap_or(h_defaut_arr);
+                let m_init_arr = arrivee.map(|t| t.minute()).unwrap_or(0);
+                let h_init_sor = sortie.map(|t| t.hour()).unwrap_or(h_defaut_sort);
+                let m_init_sor = sortie.map(|t| t.minute()).unwrap_or(0);
+
+                let mut h = h_init_arr;
+                let mut m = m_init_arr;
+                let mut h2 = h_init_sor;
+                let mut m2 = m_init_sor;
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Arrivée")
+                            .size(11.0)
+                            .color(theme::TEXTE_SECONDAIRE)
+                            .strong(),
+                    );
+                    ui.add_space(4.0);
+                    let ch1 = ui
+                        .add(
+                            egui::DragValue::new(&mut h)
+                                .range(0..=23)
+                                .speed(1)
+                                .custom_formatter(|n, _| format!("{:02}", n as i64)),
+                        )
+                        .changed();
+                    let ch2 = ui
+                        .add(
+                            egui::DragValue::new(&mut m)
+                                .range(0..=59)
+                                .speed(1)
+                                .custom_formatter(|n, _| format!("{:02}", n as i64)),
+                        )
+                        .changed();
+                    if ch1 || ch2 {
+                        if let Some(t) = NaiveTime::from_hms_opt(h, m, 0) {
+                            *arrivee = Some(t);
+                            *coche = true;
+                        }
+                    }
+
+                    ui.add_space(10.0);
+
+                    ui.label(
+                        egui::RichText::new("Sortie")
+                            .size(11.0)
+                            .color(theme::TEXTE_SECONDAIRE)
+                            .strong(),
+                    );
+                    ui.add_space(4.0);
+                    let ch3 = ui
+                        .add(
+                            egui::DragValue::new(&mut h2)
+                                .range(0..=23)
+                                .speed(1)
+                                .custom_formatter(|n, _| format!("{:02}", n as i64)),
+                        )
+                        .changed();
+                    let ch4 = ui
+                        .add(
+                            egui::DragValue::new(&mut m2)
+                                .range(0..=59)
+                                .speed(1)
+                                .custom_formatter(|n, _| format!("{:02}", n as i64)),
+                        )
+                        .changed();
+                    if ch3 || ch4 {
+                        if let Some(t) = NaiveTime::from_hms_opt(h2, m2, 0) {
+                            *sortie = Some(t);
+                            *coche = true;
+                        }
+                    }
                 });
             });
-
-            let coche_apres = *coche;
-
-            if coche_apres && !coche_avant {
-                if arrivee.is_none() {
-                    *arrivee = NaiveTime::from_hms_opt(h_defaut_arr, 0, 0);
-                }
-                if sortie.is_none() {
-                    *sortie = NaiveTime::from_hms_opt(h_defaut_sort, 0, 0);
-                }
-            }
-
-            if !coche_apres && coche_avant {
-                *arrivee = None;
-                *sortie = None;
-            }
-
-            ui.add_space(8.0);
-
-            let h_init_arr = arrivee.map(|t| t.hour()).unwrap_or(h_defaut_arr);
-            let m_init_arr = arrivee.map(|t| t.minute()).unwrap_or(0);
-            let h_init_sor = sortie.map(|t| t.hour()).unwrap_or(h_defaut_sort);
-            let m_init_sor = sortie.map(|t| t.minute()).unwrap_or(0);
-
-            let mut h = h_init_arr;
-            let mut m = m_init_arr;
-            let mut h2 = h_init_sor;
-            let mut m2 = m_init_sor;
-
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("Arrivée")
-                        .size(11.0)
-                        .color(theme::TEXTE_SECONDAIRE)
-                        .strong(),
-                );
-                ui.add_space(4.0);
-                let ch1 = ui
-                    .add(
-                        egui::DragValue::new(&mut h)
-                            .range(0..=23)
-                            .speed(1)
-                            .custom_formatter(|n, _| format!("{:02}", n as i64)),
-                    )
-                    .changed();
-                let ch2 = ui
-                    .add(
-                        egui::DragValue::new(&mut m)
-                            .range(0..=59)
-                            .speed(1)
-                            .custom_formatter(|n, _| format!("{:02}", n as i64)),
-                    )
-                    .changed();
-                if ch1 || ch2 {
-                    if let Some(t) = NaiveTime::from_hms_opt(h, m, 0) {
-                        *arrivee = Some(t);
-                        *coche = true;
-                    }
-                }
-
-                ui.add_space(10.0);
-
-                ui.label(
-                    egui::RichText::new("Sortie")
-                        .size(11.0)
-                        .color(theme::TEXTE_SECONDAIRE)
-                        .strong(),
-                );
-                ui.add_space(4.0);
-                let ch3 = ui
-                    .add(
-                        egui::DragValue::new(&mut h2)
-                            .range(0..=23)
-                            .speed(1)
-                            .custom_formatter(|n, _| format!("{:02}", n as i64)),
-                    )
-                    .changed();
-                let ch4 = ui
-                    .add(
-                        egui::DragValue::new(&mut m2)
-                            .range(0..=59)
-                            .speed(1)
-                            .custom_formatter(|n, _| format!("{:02}", n as i64)),
-                    )
-                    .changed();
-                if ch3 || ch4 {
-                    if let Some(t) = NaiveTime::from_hms_opt(h2, m2, 0) {
-                        *sortie = Some(t);
-                        *coche = true;
-                    }
-                }
-            });
-        });
+    });
 }
 
 fn precedente(d: NaiveDate) -> (i32, u32) {
