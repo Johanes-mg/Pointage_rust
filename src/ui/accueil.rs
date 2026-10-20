@@ -85,6 +85,10 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
         .request_repaint_after(Duration::from_millis(500));
 }
 
+// ---------------------------------------------------------------------------
+// Colonne gauche : calendrier
+// ---------------------------------------------------------------------------
+
 fn calendrier_gauche(ui: &mut egui::Ui, state: &mut AccueilState) {
     theme::carte(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -267,16 +271,13 @@ fn appliquer_selection(state: &mut AccueilState, d: NaiveDate) {
         (None, _) => state.date_debut = Some(d),
         (Some(debut), None) => {
             if d < debut {
-                // clic antérieur : on inverse
                 state.date_fin = Some(debut);
                 state.date_debut = Some(d);
             } else {
                 state.date_fin = Some(d);
             }
         }
-        (Some(debut), Some(fin)) => {
-            // les deux sont remplies : un nouveau clic réinitialise en repartant de ce clic
-            let _ = (debut, fin);
+        (Some(_), Some(_)) => {
             state.date_debut = Some(d);
             state.date_fin = None;
         }
@@ -284,81 +285,208 @@ fn appliquer_selection(state: &mut AccueilState, d: NaiveDate) {
 }
 
 // ---------------------------------------------------------------------------
-// Colonne droite : horloge + boutons d'export
+// Colonne droite : une seule carte, sections séparées
 // ---------------------------------------------------------------------------
 
 fn panneau_droit(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
-    // Horloge
-    egui::Frame::none()
-        .fill(theme::FOND_CARTE)
-        .rounding(theme::r_md())
-        .stroke(egui::Stroke::new(1.0_f32, theme::BORDURE))
-        .inner_margin(egui::Margin::symmetric(24.0, 22.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-
-            let now = Local::now();
-            let jours_fr = [
-                "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche",
-            ];
-            let mois_fr = [
-                "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
-                "septembre", "octobre", "novembre", "décembre",
-            ];
-            let jour_nom = jours_fr[now.weekday().num_days_from_monday() as usize];
-            let mois_nom = mois_fr[now.month0() as usize];
-            let date_str = format!("{} {} {}", now.day(), mois_nom, now.year());
-
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    egui::RichText::new(jour_nom)
-                        .size(22.0)
-                        .color(theme::PRIMAIRE)
-                        .strong(),
-                );
-                ui.add_space(2.0);
-
-                ui.label(
-                    egui::RichText::new(now.format("%H:%M:%S").to_string())
-                        .size(52.0)
-                        .color(theme::ACCENT)
-                        .strong(),
-                );
-                ui.add_space(2.0);
-
-                ui.label(
-                    egui::RichText::new(date_str)
-                        .size(15.0)
-                        .color(theme::TEXTE_SECONDAIRE),
-                );
-            });
-        });
-
-    ui.add_space(16.0);
-
-    // Bloc "Exporter en Excel (aujourd'hui)"
     theme::carte(ui, |ui| {
         ui.set_width(ui.available_width());
 
+        section_horloge(ui);
+
+        ui.add_space(20.0);
+        theme::separateur(ui);
+        ui.add_space(20.0);
+
+        section_export_rapide(ui, db, state);
+
+        ui.add_space(20.0);
+        theme::separateur(ui);
+        ui.add_space(20.0);
+
+        section_export_plage(ui, db, state);
+
+        if state.message_visible() && !state.message.is_empty() {
+            ui.add_space(20.0);
+            section_message(ui, &state.message, state.message_ok);
+        }
+    });
+}
+
+fn section_horloge(ui: &mut egui::Ui) {
+    let now = Local::now();
+    let jours_fr = [
+        "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche",
+    ];
+    let mois_fr = [
+        "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
+        "septembre", "octobre", "novembre", "décembre",
+    ];
+    let jour_nom = jours_fr[now.weekday().num_days_from_monday() as usize];
+    let mois_nom = mois_fr[now.month0() as usize];
+    let date_str = format!("{} {} {}", now.day(), mois_nom, now.year());
+
+    ui.vertical_centered(|ui| {
         ui.label(
-            egui::RichText::new("Export rapide — aujourd'hui")
-                .size(14.0)
-                .color(theme::PRIMAIRE)
+            egui::RichText::new(jour_nom.to_uppercase())
+                .size(13.0)
+                .color(theme::TEXTE_SECONDAIRE)
+                .strong()
+                .extra_letter_spacing(1.5),
+        );
+        ui.add_space(8.0);
+
+        ui.label(
+            egui::RichText::new(now.format("%H:%M:%S").to_string())
+                .size(56.0)
+                .color(theme::ACCENT)
                 .strong(),
         );
         ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                "Exporte les pointages, le personnel et le bilan pour la date du jour.",
-            )
-            .size(12.0)
-            .color(theme::TEXTE_SECONDAIRE),
-        );
-        ui.add_space(12.0);
 
-        if theme::bouton_image_texte(ui, "exporter.png", "Exporter en Excel", 260.0, 44.0) {
-            let t = Local::now().date_naive();
-            match excel_export::exporter_tout(db, t, t) {
+        ui.label(
+            egui::RichText::new(date_str)
+                .size(15.0)
+                .color(theme::TEXTE_SECONDAIRE),
+        );
+    });
+}
+
+fn section_export_rapide(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
+    sous_titre(ui, "Export rapide", "Pour aujourd'hui");
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "Exporte le personnel, les pointages et le bilan de la journée en cours.",
+        )
+        .size(12.0)
+        .color(theme::TEXTE_SECONDAIRE),
+    );
+    ui.add_space(12.0);
+
+    if theme::bouton_image_texte(ui, "exporter.png", "Exporter en Excel", 280.0, 44.0) {
+        let t = Local::now().date_naive();
+        match excel_export::exporter_tout(db, t, t) {
+            Ok(chemin) => {
+                state.afficher_message(format!("Export réussi : {}", chemin), true);
+            }
+            Err(e) => {
+                state.afficher_message(format!("Erreur : {}", e), false);
+            }
+        }
+    }
+}
+
+fn section_export_plage(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
+    sous_titre(ui, "Export par plage", "Choisissez deux dates");
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "Cliquez un premier jour pour la date de début, un second pour la date de fin.",
+        )
+        .size(12.0)
+        .color(theme::TEXTE_SECONDAIRE),
+    );
+
+    ui.add_space(16.0);
+
+    // --- Ligne d'aperçu (Début → Fin) ---
+    ui.horizontal(|ui| {
+        champ_date(
+            ui,
+            "DÉBUT",
+            state.date_debut,
+            theme::SELECTION_JOUR,
+            theme::PRIMAIRE,
+        );
+
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new("→")
+                .size(16.0)
+                .color(theme::TEXTE_SECONDAIRE),
+        );
+        ui.add_space(8.0);
+
+        champ_date(
+            ui,
+            "FIN",
+            state.date_fin,
+            theme::JOUR_BIEN_BG,
+            theme::SUCCES,
+        );
+    });
+
+    // --- Résumé de la plage ---
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        match (state.date_debut, state.date_fin) {
+            (Some(d), Some(f)) => {
+                let nb = (f - d).num_days() + 1;
+                let texte = if nb == 1 {
+                    "Plage : 1 jour".to_string()
+                } else {
+                    format!("Plage : {} jours", nb)
+                };
+                theme::badge(ui, &texte, theme::FOND_BILAN, theme::PRIMAIRE);
+            }
+            (Some(_), None) => {
+                theme::badge(
+                    ui,
+                    "Sélectionnez la date de fin",
+                    theme::JOUR_MOYEN_BG,
+                    theme::WARNING,
+                );
+            }
+            _ => {
+                theme::badge(
+                    ui,
+                    "Aucune date sélectionnée",
+                    theme::FOND,
+                    theme::TEXTE_SECONDAIRE,
+                );
+            }
+        }
+
+        // Bouton réinitialiser compact, aligné à droite
+        if state.date_debut.is_some() || state.date_fin.is_some() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::bouton_image_seule(ui, "effacer.png", 32.0, 16.0) {
+                    state.date_debut = None;
+                    state.date_fin = None;
+                }
+            });
+        }
+    });
+
+    ui.add_space(14.0);
+
+    // --- Bouton d'export (pleine largeur, désactivé si pas prêt) ---
+    let pret = matches!((state.date_debut, state.date_fin), (Some(_), Some(_)));
+    let largeur_bouton = (ui.available_width() - 8.0).max(240.0);
+
+    let mut clique_export = false;
+    if pret {
+        clique_export = theme::bouton_image_texte(
+            ui,
+            "exporter.png",
+            "Exporter telles dates",
+            largeur_bouton,
+            44.0,
+        );
+    } else {
+        bouton_desactive(
+            ui,
+            "exporter.png",
+            "Exporter telles dates",
+            largeur_bouton,
+            44.0,
+        );
+    }
+
+    if clique_export {
+        if let (Some(d), Some(f)) = (state.date_debut, state.date_fin) {
+            match excel_export::exporter_tout(db, d, f) {
                 Ok(chemin) => {
                     state.afficher_message(format!("Export réussi : {}", chemin), true);
                 }
@@ -367,131 +495,114 @@ fn panneau_droit(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
                 }
             }
         }
-    });
-
-    ui.add_space(16.0);
-
-    // Bloc "Exporter telles dates"
-    theme::carte(ui, |ui| {
-        ui.set_width(ui.available_width());
-
-        ui.label(
-            egui::RichText::new("Export par plage de dates")
-                .size(14.0)
-                .color(theme::PRIMAIRE)
-                .strong(),
-        );
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                "Cliquez une première fois sur un jour pour la date de début, \
-                 une seconde fois pour la date de fin.",
-            )
-            .size(12.0)
-            .color(theme::TEXTE_SECONDAIRE),
-        );
-
-        ui.add_space(12.0);
-
-        // Affichage des deux dates sélectionnées
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Début :")
-                    .size(12.0)
-                    .color(theme::TEXTE_SECONDAIRE)
-                    .strong(),
-            );
-            match state.date_debut {
-                Some(d) => theme::badge(
-                    ui,
-                    &d.format("%d/%m/%Y").to_string(),
-                    theme::SELECTION_JOUR,
-                    theme::PRIMAIRE,
-                ),
-                None => {
-                    ui.label(
-                        egui::RichText::new("(sélectionnez dans le calendrier)")
-                            .size(12.0)
-                            .color(theme::TEXTE_SECONDAIRE)
-                            .italics(),
-                    );
-                }
-            }
-        });
-
-        ui.add_space(6.0);
-
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Fin :")
-                    .size(12.0)
-                    .color(theme::TEXTE_SECONDAIRE)
-                    .strong(),
-            );
-            match state.date_fin {
-                Some(d) => theme::badge(
-                    ui,
-                    &d.format("%d/%m/%Y").to_string(),
-                    theme::JOUR_BIEN_BG,
-                    theme::SUCCES,
-                ),
-                None => {
-                    ui.label(
-                        egui::RichText::new("(cliquez un second jour)")
-                            .size(12.0)
-                            .color(theme::TEXTE_SECONDAIRE)
-                            .italics(),
-                    );
-                }
-            }
-        });
-
-        ui.add_space(12.0);
-
-        let pret = matches!((state.date_debut, state.date_fin), (Some(_), Some(_)));
-
-        let mut clique_export = false;
-        if pret {
-            clique_export =
-                theme::bouton_image_texte(ui, "exporter.png", "Exporter telles dates", 280.0, 44.0);
-        } else {
-            bouton_desactive(ui, "exporter.png", "Exporter telles dates", 280.0, 44.0);
-        }
-
-        if clique_export {
-            if let (Some(d), Some(f)) = (state.date_debut, state.date_fin) {
-                match excel_export::exporter_tout(db, d, f) {
-                    Ok(chemin) => {
-                        state.afficher_message(format!("Export réussi : {}", chemin), true);
-                    }
-                    Err(e) => {
-                        state.afficher_message(format!("Erreur : {}", e), false);
-                    }
-                }
-            }
-        }
-
-        ui.add_space(10.0);
-
-        if state.date_debut.is_some() || state.date_fin.is_some() {
-            if theme::bouton_secondaire(ui, "Réinitialiser la sélection", 280.0) {
-                state.date_debut = None;
-                state.date_fin = None;
-            }
-        }
-    });
-
-    ui.add_space(16.0);
-
-    // Message d'état (auto-effacé après 10 s)
-    if state.message_visible() && !state.message.is_empty() {
-        theme::message_inline(ui, &state.message, state.message_ok);
     }
 }
 
+fn section_message(ui: &mut egui::Ui, texte: &str, ok: bool) {
+    let (fond, couleur, icone) = if ok {
+        (
+            egui::Color32::from_rgb(209, 250, 229),
+            theme::SUCCES,
+            "✓",
+        )
+    } else {
+        (
+            egui::Color32::from_rgb(254, 226, 226),
+            theme::DANGER,
+            "✗",
+        )
+    };
+
+    egui::Frame::none()
+        .fill(fond)
+        .rounding(theme::r_sm())
+        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(icone)
+                        .size(14.0)
+                        .color(couleur)
+                        .strong(),
+                );
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new(texte).size(12.5).color(couleur));
+            });
+        });
+}
+
 // ---------------------------------------------------------------------------
-// Utilitaires
+// Sous-composants
 // ---------------------------------------------------------------------------
+
+fn sous_titre(ui: &mut egui::Ui, principal: &str, secondaire: &str) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(principal)
+                .size(14.5)
+                .color(theme::PRIMAIRE)
+                .strong(),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(secondaire)
+                .size(12.0)
+                .color(theme::TEXTE_SECONDAIRE)
+                .italics(),
+        );
+    });
+}
+
+fn champ_date(
+    ui: &mut egui::Ui,
+    label: &str,
+    date: Option<NaiveDate>,
+    fond: egui::Color32,
+    couleur_texte: egui::Color32,
+) {
+    ui.vertical(|ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .size(10.5)
+                .color(theme::TEXTE_SECONDAIRE)
+                .strong()
+                .extra_letter_spacing(1.0),
+        );
+        ui.add_space(4.0);
+
+        match date {
+            Some(d) => {
+                egui::Frame::none()
+                    .fill(fond)
+                    .rounding(theme::r_sm())
+                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(d.format("%d/%m/%Y").to_string())
+                                .size(13.0)
+                                .color(couleur_texte)
+                                .strong(),
+                        );
+                    });
+            }
+            None => {
+                egui::Frame::none()
+                    .fill(theme::FOND)
+                    .rounding(theme::r_sm())
+                    .stroke(egui::Stroke::new(1.0_f32, theme::BORDURE))
+                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("—")
+                                .size(13.0)
+                                .color(theme::TEXTE_SECONDAIRE),
+                        );
+                    });
+            }
+        }
+    });
+}
 
 fn bouton_desactive(
     ui: &mut egui::Ui,

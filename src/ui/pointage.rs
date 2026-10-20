@@ -63,6 +63,20 @@ impl PointageState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Mise en page principale
+// ---------------------------------------------------------------------------
+//
+// On calcule les largeurs à partir de l'espace réellement disponible à
+// l'intérieur du panneau central (déjà amputé des marges de 30 px de
+// main_window.rs). On impose :
+//   * une largeur minimum au calendrier :  340 px
+//   * une largeur minimum à la liste    :  320 px
+//   * un écart fixe de 16 px entre les deux
+//
+// Si la fenêtre est trop étroite pour tout tenir, on bascule en colonne
+// unique (le calendrier au-dessus, la liste en dessous) pour ne rien perdre.
+//
 pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
     ui.label(
         egui::RichText::new("Pointage")
@@ -72,9 +86,29 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
     );
     ui.add_space(16.0);
 
-    let largeur_totale = ui.available_width();
-    let largeur_gauche = (largeur_totale * 0.42).max(420.0);
-    let largeur_droite = largeur_totale - largeur_gauche - 16.0;
+    let dispo = ui.available_width();
+    let ecart = 16.0_f32;
+
+    let largeur_gauche_min = 340.0_f32;
+    let largeur_droite_min = 320.0_f32;
+    let seuil_deux_colonnes = largeur_gauche_min + ecart + largeur_droite_min;
+
+    if dispo < seuil_deux_colonnes {
+        // Pas assez de place : on empile verticalement.
+        calendrier_gauche(ui, db, state);
+        ui.add_space(16.0);
+        employes_droite(ui, db, state);
+        return;
+    }
+
+    // Répartition : la gauche prend 42% mais n'écrase jamais la droite.
+    let mut largeur_gauche = (dispo * 0.42).max(largeur_gauche_min);
+    let mut largeur_droite = dispo - largeur_gauche - ecart;
+
+    if largeur_droite < largeur_droite_min {
+        largeur_droite = largeur_droite_min;
+        largeur_gauche = (dispo - ecart - largeur_droite).max(largeur_gauche_min);
+    }
 
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(
@@ -85,7 +119,7 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
             },
         );
 
-        ui.add_space(16.0);
+        ui.add_space(ecart);
 
         ui.allocate_ui_with_layout(
             egui::vec2(largeur_droite, ui.available_height()),
@@ -485,6 +519,17 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
     });
 }
 
+// ---------------------------------------------------------------------------
+// Colonne droite
+// ---------------------------------------------------------------------------
+//
+//  * Le ScrollArea::both permet de scroller horizontalement si jamais la
+//    largeur est encore trop petite.
+//  * Les cartes ne font plus "available_width() - 32" : le Frame gère déjà
+//    ses propres marges internes.
+//  * Les 2 blocs matin / aprem passent par `ui.columns(2, ...)` sur une
+//    largeur d'au moins ~380 px, sinon on empile à la verticale.
+//
 fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
     if state.cache_personnel.is_none() {
         state.cache_personnel = Some(db.get_personnel().unwrap_or_default());
@@ -502,6 +547,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
         0.0
     };
 
+    // Bandeau "bilan du jour"
     egui::Frame::none()
         .fill(theme::FOND_BILAN)
         .rounding(theme::r_md())
@@ -594,10 +640,15 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
     let mut action_supprimer: Option<i64> = None;
     let mut action_enregistrer: Option<i64> = None;
 
-    egui::ScrollArea::vertical()
+    // ScrollArea both : si la carte d'un employé devient trop large, un
+    // scroll horizontal apparaît au lieu de tronquer le contenu.
+    egui::ScrollArea::both()
         .id_source("pointage_employes_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.set_width(ui.available_width());
+
             for p in &personnes {
                 let est_pointe = state.pointages_jour.contains(&p.id);
 
@@ -612,7 +663,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                     .rounding(theme::r_md())
                     .inner_margin(egui::Margin::same(16.0))
                     .show(ui, |ui| {
-                        ui.set_width(ui.available_width() - 32.0);
+                        ui.set_width(ui.available_width());
 
                         ui.label(
                             egui::RichText::new(p.nom_complet())
@@ -627,9 +678,35 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                             let id_matin = format!("matin_{}", p.id);
                             let id_aprem = format!("aprem_{}", p.id);
 
-                            ui.columns(2, |cols| {
+                            let largeur = ui.available_width();
+                            let bascule_deux_colonnes = largeur >= 380.0;
+
+                            if bascule_deux_colonnes {
+                                ui.columns(2, |cols| {
+                                    bloc_plage(
+                                        &mut cols[0],
+                                        &id_matin,
+                                        "MATIN",
+                                        &mut b.coche_matin,
+                                        &mut b.matin_arr,
+                                        &mut b.matin_sort,
+                                        8,
+                                        12,
+                                    );
+                                    bloc_plage(
+                                        &mut cols[1],
+                                        &id_aprem,
+                                        "APRÈS-MIDI",
+                                        &mut b.coche_aprem,
+                                        &mut b.aprem_arr,
+                                        &mut b.aprem_sort,
+                                        14,
+                                        17,
+                                    );
+                                });
+                            } else {
                                 bloc_plage(
-                                    &mut cols[0],
+                                    ui,
                                     &id_matin,
                                     "MATIN",
                                     &mut b.coche_matin,
@@ -638,8 +715,9 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                                     8,
                                     12,
                                 );
+                                ui.add_space(8.0);
                                 bloc_plage(
-                                    &mut cols[1],
+                                    ui,
                                     &id_aprem,
                                     "APRÈS-MIDI",
                                     &mut b.coche_aprem,
@@ -648,7 +726,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                                     14,
                                     17,
                                 );
-                            });
+                            }
 
                             ui.add_space(10.0);
 
@@ -712,7 +790,6 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
         let _ = db.supprimer_pointage(id, state.date_selectionnee);
         state.pointages_jour.retain(|x| *x != id);
         state.cache_mois = None;
-        // Invalide le cache jour pour forcer un rechargement depuis la base
         state.cache_date_pointages = None;
         state.brouillons.remove(&id);
     }
@@ -742,7 +819,6 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                 }
             }
             state.cache_mois = None;
-            // Invalide le cache jour pour forcer un rechargement depuis la base
             state.cache_date_pointages = None;
             state.brouillons.remove(&id);
         }
@@ -844,7 +920,9 @@ fn bloc_plage(
                 let mut h2 = h_init_sor;
                 let mut m2 = m_init_sor;
 
-                ui.horizontal(|ui| {
+                // horizontal_wrapped : si la place manque, "Sortie" passe
+                // automatiquement à la ligne au lieu d'être tronquée.
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         egui::RichText::new("Arrivée")
                             .size(11.0)
