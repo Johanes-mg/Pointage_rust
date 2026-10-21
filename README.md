@@ -1,6 +1,6 @@
 # Pointage
 
-Application desktop Windows de gestion de pointage du personnel, écrite en **Rust** avec **egui / eframe**.  
+Application desktop Windows de gestion de pointage du personnel, écrite en **Rust** avec **egui / eframe**.
 Elle permet de gérer le personnel, de saisir les pointages quotidiens, de visualiser un bilan mensuel avec notation sur 20, d'exporter en Excel et de marquer des jours fériés.
 
 ---
@@ -10,13 +10,13 @@ Elle permet de gérer le personnel, de saisir les pointages quotidiens, de visua
 - [Aperçu](#aperçu)
 - [Fonctionnalités](#fonctionnalités)
 - [Stack technique](#stack-technique)
-- [Installation](#installation)
-- [Utilisation](#utilisation)
-- [Structure du projet](#structure-du-projet)
+- [Prérequis](#prérequis)
 - [Compilation](#compilation)
 - [Création de l'installateur](#création-de-linstallateur)
+- [Structure du projet](#structure-du-projet)
 - [Données utilisateur](#données-utilisateur)
 - [Images et ressources](#images-et-ressources)
+- [Notes de version](#notes-de-version)
 - [Dépannage](#dépannage)
 - [Licence](#licence)
 
@@ -32,6 +32,7 @@ Elle permet de gérer le personnel, de saisir les pointages quotidiens, de visua
 | Export | Excel (via `rust_xlsxwriter`) |
 | Cible de compilation | `x86_64-pc-windows-gnullvm` |
 | Version | 2.2.0 |
+| Auteur | Johanes-mg |
 
 ---
 
@@ -41,7 +42,7 @@ Elle permet de gérer le personnel, de saisir les pointages quotidiens, de visua
 - Création de compte au premier lancement.
 - Connexion / déconnexion.
 - Un fichier de base de données **par utilisateur** (`pointage_<nom>.db`).
-- Mot de passe hashé (PBKDF2-HMAC-SHA256, 100 000 itérations).
+- Mot de passe haché (PBKDF2-HMAC-SHA256, 100 000 itérations).
 
 ### Personnel
 - Ajout, modification, suppression de membres.
@@ -59,9 +60,9 @@ Elle permet de gérer le personnel, de saisir les pointages quotidiens, de visua
 ### Bilan
 - Sélection d'un membre et d'un mois.
 - Calendrier coloré selon la **note du jour sur 20** :
-  - 🟢 ≥ 16/20 — Bien
-  - 🟡 10–16/20 — Moyen
-  - 🔴 < 10/20 — Mauvais
+  - Vert : 16/20 et plus — Bien
+  - Jaune : 10 à 15,9/20 — Moyen
+  - Rouge : moins de 10/20 — Mauvais
 - Détail du jour : note matin / note après-midi / moyenne du jour.
 - Graphique par tranche (barres à 0 masquées).
 
@@ -74,6 +75,7 @@ Elle permet de gérer le personnel, de saisir les pointages quotidiens, de visua
 ### Accueil
 - Horloge en temps réel.
 - Bouton **Exporter en Excel** (fichier `.xlsx` dans `Documents/Pointage Exports/`).
+- Export rapide du jour et export par plage de dates.
 
 ---
 
@@ -89,12 +91,11 @@ Elle permet de gérer le personnel, de saisir les pointages quotidiens, de visua
 | `rust_xlsxwriter` | Génération `.xlsx` |
 | `rfd` | Dialogues fichier natifs |
 | `directories` | Chemins `%APPDATA%\Johanes\Pointage\data\` |
+| `winres` (build) | Ressources Windows (icône + version) |
 
 ---
 
-## Installation
-
-### Prérequis
+## Prérequis
 
 - **Rust** avec la toolchain `gnullvm` :
 
