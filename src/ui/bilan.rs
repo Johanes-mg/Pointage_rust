@@ -275,7 +275,7 @@ fn afficher_classement(
         ui.vertical_centered(|ui| {
             ui.add_space(40.0);
             ui.label(
-                egui::RichText::new("Aucun personnel enregistre")
+                egui::RichText::new("Aucun personnel enregistré")
                     .size(13.0)
                     .color(theme::TEXTE_SECONDAIRE),
             );
@@ -838,21 +838,21 @@ fn afficher_bilan_perso(
         let j = d.day();
         if ferie_jour_entier(&feries, j) {
             ui.label(
-                egui::RichText::new("Jour ferie (jour entier)")
+                egui::RichText::new("Jour férié (jour entier)")
                     .size(12.5)
                     .color(theme::WARNING)
                     .strong(),
             );
         } else if ferie_periode(&feries, j, "matin") {
             ui.label(
-                egui::RichText::new("Matin ferie")
+                egui::RichText::new("Matin férié")
                     .size(12.5)
                     .color(theme::WARNING)
                     .strong(),
             );
         } else if ferie_periode(&feries, j, "aprem") {
             ui.label(
-                egui::RichText::new("Apres-midi ferie")
+                egui::RichText::new("Après-midi férié")
                     .size(12.5)
                     .color(theme::WARNING)
                     .strong(),
@@ -862,7 +862,7 @@ fn afficher_bilan_perso(
         match dict.get(&d) {
             None => {
                 if !ferie_jour_entier(&feries, j) {
-                    ui.label("Aucun pointage enregistre pour cette date.");
+                    ui.label("Aucun pointage enregistré pour cette date.");
                 }
             }
             Some(pt) => {

@@ -47,7 +47,7 @@ pub fn exporter_tout(
     let ws = wb.add_worksheet();
     ws.set_name("Personnel").map_err(|e| e.to_string())?;
     let headers = [
-        "MATRICULE", "NOM", "PRENOM", "TELEPHONE", "ADRESSE", "EMAIL", "STATUT", "GRADE",
+        "MATRICULE", "NOM", "PRÉNOM", "TÉLÉPHONE", "ADRESSE", "EMAIL", "STATUT", "GRADE",
         "SITUATION FAMILIALE",
     ];
     for (i, h) in headers.iter().enumerate() {
@@ -71,8 +71,8 @@ pub fn exporter_tout(
     let ws = wb.add_worksheet();
     ws.set_name("Pointages").map_err(|e| e.to_string())?;
     let headers = [
-        "MATRICULE", "NOM", "PRENOM", "DATE", "STATUT", "MATIN ARRIVEE", "MATIN SORTIE",
-        "APRES-MIDI ARRIVEE", "APRES-MIDI SORTIE", "TOTAL JOUR", "OBSERVATION",
+        "MATRICULE", "NOM", "PRÉNOM", "DATE", "STATUT", "MATIN ARRIVÉE", "MATIN SORTIE",
+        "APRÈS-MIDI ARRIVÉE", "APRÈS-MIDI SORTIE", "TOTAL JOUR", "OBSERVATION",
     ];
     for (i, h) in headers.iter().enumerate() {
         ws.write_with_format(0, i as u16, *h, &entete)
@@ -90,7 +90,7 @@ pub fn exporter_tout(
                 let matin = periodes.iter().any(|x| x == "matin");
                 let aprem = periodes.iter().any(|x| x == "aprem");
                 if jour_entier {
-                    "ferie".to_string()
+                    "férié".to_string()
                 } else {
                     let mut parts: Vec<&str> = Vec::new();
                     if matin {
@@ -99,7 +99,7 @@ pub fn exporter_tout(
                     if aprem {
                         parts.push("aprem");
                     }
-                    format!("ferie {}", parts.join(" + "))
+                    format!("férié {}", parts.join(" + "))
                 }
             }
             None => String::new(),
@@ -122,8 +122,8 @@ pub fn exporter_tout(
     let ws = wb.add_worksheet();
     ws.set_name("Bilan").map_err(|e| e.to_string())?;
     let headers = [
-        "PERSONNE", "JOURS PRESENT", "MATINS", "APRES-MIDIS", "TOTAL HEURES",
-        "ARRIVEE MOYENNE",
+        "PERSONNE", "JOURS PRÉSENT", "MATINS", "APRÈS-MIDIS", "TOTAL HEURES",
+        "ARRIVÉE MOYENNE",
     ];
     for (i, h) in headers.iter().enumerate() {
         ws.write_with_format(0, i as u16, *h, &entete)
@@ -142,7 +142,7 @@ pub fn exporter_tout(
 
     let ws = wb.add_worksheet();
     ws.set_name("Notation").map_err(|e| e.to_string())?;
-    let headers = ["PERSONNE", "MOYENNE /20", "JOURS EVALUES"];
+    let headers = ["PERSONNE", "MOYENNE /20", "JOURS ÉVALUÉS"];
     for (i, h) in headers.iter().enumerate() {
         ws.write_with_format(0, i as u16, *h, &entete)
             .map_err(|e| e.to_string())?;
@@ -157,14 +157,14 @@ pub fn exporter_tout(
     ws.autofit();
 
     let ws = wb.add_worksheet();
-    ws.set_name("Periode").map_err(|e| e.to_string())?;
+    ws.set_name("Période").map_err(|e| e.to_string())?;
     ws.write(0, 0, "Service").ok();
     ws.write(0, 1, &snapshot.nom_entreprise).ok();
     ws.write(1, 0, "Du").ok();
     ws.write(1, 1, debut.format("%d/%m/%Y").to_string()).ok();
     ws.write(2, 0, "Au").ok();
     ws.write(2, 1, fin.format("%d/%m/%Y").to_string()).ok();
-    ws.write(3, 0, "Exporte le").ok();
+    ws.write(3, 0, "Exporté le").ok();
     ws.write(3, 1, chrono::Local::now().format("%d/%m/%Y %H:%M").to_string()).ok();
     ws.autofit();
 

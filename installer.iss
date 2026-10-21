@@ -63,9 +63,9 @@ begin
     if DirExists(DossierDonnees) then
     begin
       Reponse := MsgBox(
-        'Voulez-vous egalement supprimer vos donnees de pointage ?' + #13#10 + #13#10 +
+        'Voulez-vous également supprimer vos données de pointage ?' + #13#10 + #13#10 +
         'Dossier : ' + DossierDonnees + #13#10 + #13#10 +
-        'Si vous repondez Non, vos donnees seront conservees.',
+        'Si vous répondez Non, vos données seront conservées.',
         mbConfirmation, MB_YESNO);
 
       if Reponse = IDYES then

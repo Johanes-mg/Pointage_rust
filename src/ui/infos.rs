@@ -12,33 +12,33 @@ impl InfosState {
 
 pub fn afficher(ui: &mut egui::Ui, _state: &mut InfosState) {
     ui.label(
-        egui::RichText::new("Bareme de notation")
+        egui::RichText::new("Barème de notation")
             .size(26.0)
             .color(theme::PRIMAIRE)
             .strong(),
     );
     ui.add_space(4.0);
     ui.label(
-        egui::RichText::new("Regles appliquees au calcul du bilan mensuel.")
+        egui::RichText::new("Règles appliquées au calcul du bilan mensuel.")
             .size(13.5)
             .color(theme::TEXTE_SECONDAIRE),
     );
 
     ui.add_space(28.0);
-    titre_section(ui, "Principe general");
+    titre_section(ui, "Principe général");
     ui.add_space(10.0);
-    paragraphe(ui, "Chaque journee est notee sur 20 points.");
+    paragraphe(ui, "Chaque journée est notée sur 20 points.");
     ui.add_space(4.0);
-    paragraphe(ui, "10 points pour la matinee, 10 points pour l'apres-midi.");
+    paragraphe(ui, "10 points pour la matinée, 10 points pour l'après-midi.");
     ui.add_space(4.0);
     paragraphe(ui, "La note du jour est la somme des deux.");
 
     ui.add_space(28.0);
-    titre_section(ui, "Matinee (10 points)");
+    titre_section(ui, "Matinée (10 points)");
     ui.add_space(10.0);
-    ligne_regle(ui, "+ 5 points", theme::SUCCES, "Arrivee a 08h15 ou avant.");
+    ligne_regle(ui, "+ 5 points", theme::SUCCES, "Arrivée à 08h15 ou avant.");
     ui.add_space(6.0);
-    ligne_regle(ui, "+ 5 points", theme::SUCCES, "Depart a 11h45 ou apres.");
+    ligne_regle(ui, "+ 5 points", theme::SUCCES, "Départ à 11h45 ou après.");
     ui.add_space(10.0);
     paragraphe_doux(
         ui,
@@ -46,11 +46,11 @@ pub fn afficher(ui: &mut egui::Ui, _state: &mut InfosState) {
     );
 
     ui.add_space(28.0);
-    titre_section(ui, "Apres-midi (10 points)");
+    titre_section(ui, "Après-midi (10 points)");
     ui.add_space(10.0);
-    ligne_regle(ui, "+ 5 points", theme::SUCCES, "Arrivee a 14h15 ou avant.");
+    ligne_regle(ui, "+ 5 points", theme::SUCCES, "Arrivée à 14h15 ou avant.");
     ui.add_space(6.0);
-    ligne_regle(ui, "+ 5 points", theme::SUCCES, "Depart a 15h45 ou apres.");
+    ligne_regle(ui, "+ 5 points", theme::SUCCES, "Départ à 15h45 ou après.");
     ui.add_space(10.0);
     paragraphe_doux(
         ui,
@@ -58,39 +58,39 @@ pub fn afficher(ui: &mut egui::Ui, _state: &mut InfosState) {
     );
 
     ui.add_space(28.0);
-    titre_section(ui, "Jours feries");
+    titre_section(ui, "Jours fériés");
     ui.add_space(10.0);
-    paragraphe(ui, "Un jour ferie retire la ou les periodes concernees du calcul.");
+    paragraphe(ui, "Un jour férié retire la ou les périodes concernées du calcul.");
     ui.add_space(4.0);
     paragraphe_doux(
         ui,
-        "Matin : seule la matinee est retiree. La note du jour reste sur 10, ramenee sur 20.",
+        "Matin : seule la matinée est retirée. La note du jour reste sur 10, ramenée sur 20.",
     );
     ui.add_space(4.0);
     paragraphe_doux(
         ui,
-        "Apres-midi : seul l'apres-midi est retire. Meme principe.",
+        "Après-midi : seul l'après-midi est retiré. Même principe.",
     );
     ui.add_space(4.0);
     paragraphe_doux(
         ui,
-        "Jour entier : la journee entiere est exclue du calcul du bilan et du classement.",
+        "Jour entier : la journée entière est exclue du calcul du bilan et du classement.",
     );
     ui.add_space(4.0);
     paragraphe_doux(
         ui,
-        "Le pointage est bloque sur une periode feriee dans la page Pointage.",
+        "Le pointage est bloqué sur une période fériée dans la page Pointage.",
     );
 
     ui.add_space(28.0);
     titre_section(ui, "Note du jour (sur 20)");
     ui.add_space(10.0);
-    paragraphe(ui, "Note du jour = note matin + note apres-midi, hors periodes feriees.");
+    paragraphe(ui, "Note du jour = note matin + note après-midi, hors périodes fériées.");
 
     ui.add_space(16.0);
     ligne_seuil(ui, "16 / 20 et plus", theme::SUCCES, "Bien");
     ui.add_space(8.0);
-    ligne_seuil(ui, "10 a 15,9 / 20", theme::WARNING, "Moyen");
+    ligne_seuil(ui, "10 à 15,9 / 20", theme::WARNING, "Moyen");
     ui.add_space(8.0);
     ligne_seuil(ui, "Moins de 10 / 20", theme::DANGER, "Mauvais");
 

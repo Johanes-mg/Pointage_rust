@@ -129,7 +129,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
             ui.memory_mut(|m| m.request_focus(egui::Id::new("prenom_field")));
         }
         ui.add_space(12.0);
-        if champ_mi_largeur(ui, "Prenom *", &mut state.prenom, largeur, "prenom_field", false) {
+        if champ_mi_largeur(ui, "Prénom *", &mut state.prenom, largeur, "prenom_field", false) {
             ui.memory_mut(|m| m.request_focus(egui::Id::new("matricule_field")));
         }
     });
@@ -160,7 +160,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
 
         if champ_mi_largeur(
             ui,
-            "Telephone",
+            "Téléphone",
             &mut state.telephone,
             largeur,
             "telephone_field",
@@ -204,9 +204,9 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
         .width(ui.available_width())
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut state.situation, String::new(), "-");
-            ui.selectable_value(&mut state.situation, "Celibataire".into(), "Celibataire");
-            ui.selectable_value(&mut state.situation, "Marie(e)".into(), "Marie(e)");
-            ui.selectable_value(&mut state.situation, "Divorce(e)".into(), "Divorce(e)");
+            ui.selectable_value(&mut state.situation, "Célibataire".into(), "Célibataire");
+            ui.selectable_value(&mut state.situation, "Marié(e)".into(), "Marié(e)");
+            ui.selectable_value(&mut state.situation, "Divorcé(e)".into(), "Divorcé(e)");
             ui.selectable_value(&mut state.situation, "Veuf(ve)".into(), "Veuf(ve)");
         });
 
@@ -241,7 +241,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
                     let _ = db.supprimer_personnel(id);
                     state.vider();
                     state.invalider_cache();
-                    state.message = "Personnel supprime.".into();
+                    state.message = "Personnel supprimé.".into();
                     state.message_ok = true;
                     state.mutation_effectuee = true;
                 }
@@ -319,7 +319,7 @@ fn table_droite(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState, la
         ui.vertical_centered(|ui| {
             ui.add_space(40.0);
             ui.label(
-                egui::RichText::new("Aucun membre enregistre")
+                egui::RichText::new("Aucun membre enregistré")
                     .size(13.0)
                     .color(theme::TEXTE_SECONDAIRE),
             );
@@ -402,8 +402,8 @@ fn dessiner_entete(painter: &egui::Painter, rect: egui::Rect, cols: &Colonnes) {
     let titres = [
         "MATRICULE",
         "NOM",
-        "PRENOM",
-        "TELEPHONE",
+        "PRÉNOM",
+        "TÉLÉPHONE",
         "EMAIL",
         "GRADE",
     ];
@@ -565,7 +565,7 @@ fn bouton_desactive(ui: &mut egui::Ui, fichier: &str, texte: &str, largeur: f32,
 
 fn enregistrer(db: &Database, state: &mut PersonnelState, modifier: bool) {
     if state.nom.trim().is_empty() || state.prenom.trim().is_empty() {
-        state.message = "Le nom et le prenom sont obligatoires.".into();
+        state.message = "Le nom et le prénom sont obligatoires.".into();
         state.message_ok = false;
         return;
     }
@@ -578,7 +578,7 @@ fn enregistrer(db: &Database, state: &mut PersonnelState, modifier: bool) {
             p_mod.id = id;
             match db.modifier_personnel(&p_mod) {
                 Ok(_) => {
-                    state.message = "Personnel modifie.".into();
+                    state.message = "Personnel modifié.".into();
                     state.message_ok = true;
                     state.vider();
                     state.invalider_cache();
@@ -593,7 +593,7 @@ fn enregistrer(db: &Database, state: &mut PersonnelState, modifier: bool) {
     } else {
         match db.ajouter_personnel(&p) {
             Ok(_) => {
-                state.message = "Personnel ajoute.".into();
+                state.message = "Personnel ajouté.".into();
                 state.message_ok = true;
                 state.vider();
                 state.invalider_cache();

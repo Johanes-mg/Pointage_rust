@@ -207,11 +207,11 @@ fn prochaine_periode(courante: Option<&str>) -> Option<&'static str> {
 
 fn libelle_bouton_ferie(courante: Option<&str>) -> &'static str {
     match courante {
-        None => "Marquer ferie (jour)",
-        Some("jour") => "Ferie -> Matin",
-        Some("matin") => "Ferie -> Apres-midi",
-        Some("aprem") => "Retirer ferie",
-        _ => "Marquer ferie (jour)",
+        None => "Marquer férié (jour)",
+        Some("jour") => "Férié -> Matin",
+        Some("matin") => "Férié -> Après-midi",
+        Some("aprem") => "Retirer férié",
+        _ => "Marquer férié (jour)",
     }
 }
 
@@ -483,7 +483,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
 
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("Jour ferie :")
+                        egui::RichText::new("Jour férié :")
                             .size(12.0)
                             .color(theme::TEXTE_SECONDAIRE)
                             .strong(),
@@ -491,7 +491,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                     let statut = match state.ferie_jour.as_deref() {
                         Some("jour") => "Jour entier",
                         Some("matin") => "Matin",
-                        Some("aprem") => "Apres-midi",
+                        Some("aprem") => "Après-midi",
                         _ => "Aucun",
                     };
                     ui.label(
@@ -607,9 +607,9 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
             if let Some(f) = &ferie_jour {
                 ui.add_space(6.0);
                 let txt = match f.as_str() {
-                    "jour" => "Jour ferie (jour entier) - pointage bloque",
-                    "matin" => "Matin ferie - pointage matin bloque",
-                    "aprem" => "Apres-midi ferie - pointage apres-midi bloque",
+                    "jour" => "Jour férié (jour entier) - pointage bloqué",
+                    "matin" => "Matin férié - pointage matin bloqué",
+                    "aprem" => "Après-midi férié - pointage après-midi bloqué",
                     _ => "",
                 };
                 ui.label(
@@ -629,7 +629,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
             ui.vertical_centered(|ui| {
                 ui.add_space(30.0);
                 ui.label(
-                    egui::RichText::new("Aucun personnel enregistre")
+                    egui::RichText::new("Aucun personnel enregistré")
                         .size(13.0)
                         .color(theme::TEXTE_SECONDAIRE),
                 );
@@ -643,7 +643,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
         ui.add_space(8.0);
         theme::message_inline(
             ui,
-            "Jour ferie : aucun pointage n'est autorise pour cette date.",
+            "Jour férié : aucun pointage n'est autorisé pour cette date.",
             false,
         );
         return;
@@ -710,7 +710,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                                     bloc_plage(
                                         &mut cols[1],
                                         &id_aprem,
-                                        "APRES-MIDI",
+                                        "APRÈS-MIDI",
                                         &mut b.coche_aprem,
                                         &mut b.aprem_arr,
                                         &mut b.aprem_sort,
@@ -735,7 +735,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                                 bloc_plage(
                                     ui,
                                     &id_aprem,
-                                    "APRES-MIDI",
+                                    "APRÈS-MIDI",
                                     &mut b.coche_aprem,
                                     &mut b.aprem_arr,
                                     &mut b.aprem_sort,
@@ -935,7 +935,7 @@ fn bloc_plage(
                             egui::Layout::right_to_left(egui::Align::Center),
                             |ui| {
                                 ui.label(
-                                    egui::RichText::new("Ferie")
+                                    egui::RichText::new("Férié")
                                         .size(11.0)
                                         .color(theme::WARNING)
                                         .strong(),
@@ -945,7 +945,7 @@ fn bloc_plage(
                     });
                     ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new("Pointage bloque (jour ferie)")
+                        egui::RichText::new("Pointage bloqué (jour férié)")
                             .size(11.5)
                             .color(theme::TEXTE_SECONDAIRE)
                             .italics(),
@@ -997,7 +997,7 @@ fn bloc_plage(
 
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
-                        egui::RichText::new("Arrivee")
+                        egui::RichText::new("Arrivée")
                             .size(11.0)
                             .color(theme::TEXTE_SECONDAIRE)
                             .strong(),

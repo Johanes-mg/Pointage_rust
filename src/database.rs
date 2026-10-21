@@ -399,7 +399,7 @@ impl Database {
         nouveau: &str,
     ) -> Result<bool, String> {
         if nouveau.len() < 4 {
-            return Err("Le nouveau mot de passe doit contenir au moins 4 caracteres.".into());
+            return Err("Le nouveau mot de passe doit contenir au moins 4 caractères.".into());
         }
         self.with_conn(|conn| {
             let (hash, sel): (String, String) = conn

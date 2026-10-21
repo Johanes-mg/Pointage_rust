@@ -1,4 +1,4 @@
-use egui::{Color32, FontId, Rounding, Stroke};
+use egui::{Color32, FontId, Rounding, Stroke, TextureFilter, TextureOptions, TextureWrapMode};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -24,7 +24,6 @@ pub const JOUR_BIEN_BG: Color32 = Color32::from_rgb(200, 240, 210);
 pub const JOUR_MOYEN_BG: Color32 = Color32::from_rgb(255, 240, 200);
 pub const JOUR_MAUVAIS_BG: Color32 = Color32::from_rgb(255, 220, 220);
 
-// Couleur dediee pour une demi-journee feriee (distincte de "moyen")
 pub const FERIE_DEMI_BG: Color32 = Color32::from_rgb(255, 236, 214);
 
 pub const SELECTION_TEXTE: Color32 = Color32::from_rgb(210, 214, 220);
@@ -136,7 +135,12 @@ pub fn image(ctx: &egui::Context, nom: &str) -> Option<egui::TextureHandle> {
                 let taille = [rgba.width() as usize, rgba.height() as usize];
                 let pixels = rgba.into_raw();
                 let color_image = egui::ColorImage::from_rgba_unmultiplied(taille, &pixels);
-                let texture = ctx.load_texture(nom, color_image, Default::default());
+                let options = TextureOptions {
+                    magnification: TextureFilter::Linear,
+                    minification: TextureFilter::Linear,
+                    wrap_mode: TextureWrapMode::ClampToEdge,
+                };
+                let texture = ctx.load_texture(nom, color_image, options);
 
                 let mut cache = IMAGES.lock().unwrap();
                 let map = cache.get_or_insert_with(HashMap::new);
@@ -157,8 +161,14 @@ pub fn image_ui(
 ) -> egui::Response {
     let ctx = ui.ctx().clone();
     if let Some(tex) = image(&ctx, nom) {
-        let size = egui::vec2(largeur, hauteur);
-        ui.add(egui::Image::new(&tex).fit_to_exact_size(size))
+        let natif = tex.size_vec2();
+        let ratio = (largeur / natif.x).min(hauteur / natif.y);
+        let taille = if ratio >= 1.0 {
+            egui::vec2(largeur, hauteur)
+        } else {
+            egui::vec2(natif.x * ratio, natif.y * ratio)
+        };
+        ui.add(egui::Image::new(&tex).fit_to_exact_size(taille))
     } else {
         let (rect, resp) =
             ui.allocate_exact_size(egui::vec2(largeur, hauteur), egui::Sense::hover());

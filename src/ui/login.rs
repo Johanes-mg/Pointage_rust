@@ -82,7 +82,7 @@ fn panneau_gauche(ui: &mut egui::Ui, largeur: f32, hauteur: f32) {
                             .strong(),
                     );
                     ui.label(
-                        egui::RichText::new("Gestion des presences")
+                        egui::RichText::new("Gestion des présences")
                             .size(11.5)
                             .color(egui::Color32::from_rgb(180, 200, 225)),
                     );
@@ -187,7 +187,7 @@ fn formulaire(
     largeur_formulaire: f32,
 ) {
     let titre = if state.mode_creation {
-        "Creer un compte"
+        "Créer un compte"
     } else {
         "Connexion"
     };
@@ -202,7 +202,7 @@ fn formulaire(
         egui::RichText::new(if state.mode_creation {
             "Remplissez les informations ci-dessous"
         } else {
-            "Entrez vos identifiants pour acceder a l'application"
+            "Entrez vos identifiants pour accéder à l'application"
         })
         .size(13.0)
         .color(theme::TEXTE_SECONDAIRE),
@@ -303,7 +303,7 @@ fn formulaire(
     ui.add_space(8.0);
 
     let libelle = if state.mode_creation {
-        "Creer le compte"
+        "Créer le compte"
     } else {
         "Se connecter"
     };
@@ -314,9 +314,9 @@ fn formulaire(
     ui.add_space(12.0);
 
     let libelle2 = if state.mode_creation {
-        "J'ai deja un compte"
+        "J'ai déjà un compte"
     } else {
-        "Creer un nouveau compte"
+        "Créer un nouveau compte"
     };
     if bouton_secondaire(ui, libelle2, largeur_formulaire) {
         state.mode_creation = !state.mode_creation;
@@ -450,7 +450,7 @@ fn valider(db: &Database, state: &mut LoginState) -> LoginAction {
             return LoginAction::Aucune;
         }
         if state.mot_de_passe.len() < 4 {
-            state.message = "Le mot de passe doit contenir au moins 4 caracteres.".into();
+            state.message = "Le mot de passe doit contenir au moins 4 caractères.".into();
             state.message_ok = false;
             return LoginAction::Aucune;
         }
