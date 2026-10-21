@@ -24,7 +24,7 @@ pub const JOUR_BIEN_BG: Color32 = Color32::from_rgb(200, 240, 210);
 pub const JOUR_MOYEN_BG: Color32 = Color32::from_rgb(255, 240, 200);
 pub const JOUR_MAUVAIS_BG: Color32 = Color32::from_rgb(255, 220, 220);
 
-// Couleur dédiée pour une demi-journée fériée (distincte de "moyen")
+// Couleur dediee pour une demi-journee feriee (distincte de "moyen")
 pub const FERIE_DEMI_BG: Color32 = Color32::from_rgb(255, 236, 214);
 
 pub const SELECTION_TEXTE: Color32 = Color32::from_rgb(210, 214, 220);

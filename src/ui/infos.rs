@@ -97,7 +97,7 @@ pub fn afficher(ui: &mut egui::Ui, _state: &mut InfosState) {
     ui.add_space(40.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
         ui.label(
-            egui::RichText::new("(c) Johanes-mg")
+            egui::RichText::new("© Johanes-mg")
                 .size(11.0)
                 .color(theme::TEXTE_SECONDAIRE),
         );

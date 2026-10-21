@@ -88,7 +88,7 @@ pub fn afficher(
         } else {
             match db.mettre_a_jour_nom_complet(utilisateur.id, state.nom_complet.trim()) {
                 Ok(_) => {
-                    state.message_profil = "Profil mis à jour.".into();
+                    state.message_profil = "Profil mis a jour.".into();
                     state.message_profil_ok = true;
                 }
                 Err(e) => {
@@ -198,7 +198,7 @@ pub fn afficher(
     ui.add_space(10.0);
 
     ui.label(
-        egui::RichText::new("Base de données de ce compte :")
+        egui::RichText::new("Base de donnees de ce compte :")
             .size(12.0)
             .color(theme::TEXTE_SECONDAIRE)
             .strong(),
@@ -214,7 +214,7 @@ pub fn afficher(
     ui.horizontal(|ui| {
         if theme::bouton_image_texte(ui, "exporter.png", "Exporter la base (.db)", 280.0, 42.0) {
             if let Some(chemin) = FileDialog::new()
-                .set_title("Exporter la base de données")
+                .set_title("Exporter la base de donnees")
                 .add_filter("Base SQLite", &["db"])
                 .set_file_name(format!(
                     "pointage_{}_{}.db",
@@ -225,7 +225,7 @@ pub fn afficher(
             {
                 match db.exporter_base(&chemin.to_string_lossy()) {
                     Ok(_) => {
-                        state.message_bdd = format!("Base exportée : {}", chemin.display());
+                        state.message_bdd = format!("Base exportee : {}", chemin.display());
                         state.message_bdd_ok = true;
                     }
                     Err(e) => {
@@ -238,13 +238,13 @@ pub fn afficher(
         ui.add_space(12.0);
         if theme::bouton_image_texte(ui, "ajouter.png", "Importer une base (.db)", 280.0, 42.0) {
             if let Some(chemin) = FileDialog::new()
-                .set_title("Sélectionner une base à importer")
+                .set_title("Selectionner une base a importer")
                 .add_filter("Base SQLite", &["db"])
                 .pick_file()
             {
                 match db.importer_base(&chemin.to_string_lossy()) {
                     Ok(_) => {
-                        state.message_bdd = "Données importées avec succès. Votre compte est conservé.".into();
+                        state.message_bdd = "Donnees importees avec succes. Votre compte est conserve.".into();
                         state.message_bdd_ok = true;
                         state.import_effectue = true;
                     }
@@ -265,7 +265,7 @@ pub fn afficher(
     ui.add_space(12.0);
     ui.label(
         egui::RichText::new(
-            "Attention : l'import remplace TOUTES les données actuelles de Personnel, Pointage, Fériés et Paramètres. Votre compte actuel n'est pas modifié.",
+            "Attention : l'import remplace TOUTES les donnees actuelles de Personnel, Pointage, Feries et Parametres. Votre compte actuel n'est pas modifie.",
         )
         .size(11.5)
         .color(theme::DANGER)
@@ -282,7 +282,7 @@ fn valider_mdp(db: &Database, utilisateur: &Utilisateur, state: &mut CompteState
         state.message_mdp = "Tous les champs sont obligatoires.".into();
         state.message_mdp_ok = false;
     } else if state.nouveau_mdp.len() < 4 {
-        state.message_mdp = "Le nouveau mot de passe doit contenir au moins 4 caractères.".into();
+        state.message_mdp = "Le nouveau mot de passe doit contenir au moins 4 caracteres.".into();
         state.message_mdp_ok = false;
     } else if state.nouveau_mdp != state.confirmation {
         state.message_mdp = "Les deux mots de passe ne correspondent pas.".into();
@@ -290,7 +290,7 @@ fn valider_mdp(db: &Database, utilisateur: &Utilisateur, state: &mut CompteState
     } else {
         match db.changer_mot_de_passe(utilisateur.id, &state.ancien_mdp, &state.nouveau_mdp) {
             Ok(true) => {
-                state.message_mdp = "Mot de passe changé avec succès.".into();
+                state.message_mdp = "Mot de passe change avec succes.".into();
                 state.message_mdp_ok = true;
                 state.ancien_mdp.clear();
                 state.nouveau_mdp.clear();
