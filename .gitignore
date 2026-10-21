@@ -26,3 +26,6 @@ desktop.ini
 
 # --- Logs ---
 *.log
+
+# --- InnoSetup ---
+installer.iss
