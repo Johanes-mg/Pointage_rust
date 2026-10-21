@@ -14,6 +14,7 @@ pub struct CompteState {
     pub message_mdp_ok: bool,
     pub message_bdd: String,
     pub message_bdd_ok: bool,
+    pub import_effectue: bool,
 }
 
 impl CompteState {
@@ -29,6 +30,7 @@ impl CompteState {
             message_mdp_ok: true,
             message_bdd: String::new(),
             message_bdd_ok: true,
+            import_effectue: false,
         }
     }
 }
@@ -242,8 +244,9 @@ pub fn afficher(
             {
                 match db.importer_base(&chemin.to_string_lossy()) {
                     Ok(_) => {
-                        state.message_bdd = "Base importée. Redémarrage nécessaire.".into();
+                        state.message_bdd = "Données importées avec succès. Votre compte est conservé.".into();
                         state.message_bdd_ok = true;
+                        state.import_effectue = true;
                     }
                     Err(e) => {
                         state.message_bdd = format!("Erreur : {}", e);
@@ -262,7 +265,7 @@ pub fn afficher(
     ui.add_space(12.0);
     ui.label(
         egui::RichText::new(
-            "Attention : l'import remplace TOUTES les données actuelles. Un redémarrage est nécessaire.",
+            "Attention : l'import remplace TOUTES les données actuelles de Personnel, Pointage, Fériés et Paramètres. Votre compte actuel n'est pas modifié.",
         )
         .size(11.5)
         .color(theme::DANGER)

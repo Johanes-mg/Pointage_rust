@@ -29,6 +29,14 @@ impl MainWindowState {
     }
 
     fn rafraichir_caches(&mut self) {
+        if self.compte.import_effectue {
+            self.personnel.invalider_cache();
+            self.pointage.invalider_cache();
+            self.bilan.invalider_cache();
+            self.accueil.message.clear();
+            self.compte.import_effectue = false;
+        }
+
         let ancienne = self.page_precedente;
         let actuelle = self.page;
 

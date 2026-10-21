@@ -111,11 +111,48 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut BilanState) {
     let personnel = state.cache_personnel.clone().unwrap_or_default();
 
     let hauteur_dispo = ui.available_height().max(400.0);
+    let dispo = ui.available_width();
+    let ecart = 16.0_f32;
+    let seuil = 600.0_f32;
 
-    ui.columns(2, |cols| {
-        colonne_gauche(&mut cols[0], &personnel, state, hauteur_dispo);
-        colonne_droite(&mut cols[1], db, &personnel, state, hauteur_dispo);
-    });
+    if dispo < seuil {
+        theme::carte(ui, |ui| {
+            ui.set_min_height(hauteur_dispo / 2.0);
+            colonne_gauche(ui, &personnel, state, hauteur_dispo / 2.0);
+        });
+        ui.add_space(16.0);
+        theme::carte(ui, |ui| {
+            ui.set_min_height(hauteur_dispo / 2.0);
+            colonne_droite(ui, db, &personnel, state, hauteur_dispo / 2.0);
+        });
+    } else {
+        let largeur_gauche = (dispo * 0.32).max(280.0);
+        let largeur_droite = dispo - largeur_gauche - ecart;
+
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(largeur_gauche, hauteur_dispo),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    theme::carte(ui, |ui| {
+                        colonne_gauche(ui, &personnel, state, hauteur_dispo);
+                    });
+                },
+            );
+
+            ui.add_space(ecart);
+
+            ui.allocate_ui_with_layout(
+                egui::vec2(largeur_droite, hauteur_dispo),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    theme::carte(ui, |ui| {
+                        colonne_droite(ui, db, &personnel, state, hauteur_dispo);
+                    });
+                },
+            );
+        });
+    }
 }
 
 fn colonne_gauche(
@@ -124,59 +161,57 @@ fn colonne_gauche(
     state: &mut BilanState,
     hauteur: f32,
 ) {
-    theme::carte(ui, |ui| {
-        ui.set_min_height(hauteur);
-        ui.set_max_height(hauteur);
+    ui.set_min_height(hauteur);
+    ui.set_max_height(hauteur);
 
-        ui.label(
-            egui::RichText::new("Personnel")
-                .size(15.0)
-                .color(theme::PRIMAIRE)
-                .strong(),
-        );
-        ui.add_space(8.0);
-        theme::separateur(ui);
-        ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new("Personnel")
+            .size(15.0)
+            .color(theme::PRIMAIRE)
+            .strong(),
+    );
+    ui.add_space(8.0);
+    theme::separateur(ui);
+    ui.add_space(4.0);
 
-        let hauteur_liste = (hauteur - 60.0).max(120.0);
+    let hauteur_liste = (hauteur - 60.0).max(120.0);
 
-        egui::ScrollArea::vertical()
-            .id_source("bilan_personnel_scroll")
-            .max_height(hauteur_liste)
-            .auto_shrink([false, false])
-            .show_rows(
-                ui,
-                HAUTEUR_LIGNE_PERSONNEL,
-                personnel.len(),
-                |ui, range| {
-                    for i in range {
-                        let p = &personnel[i];
-                        let sel = state.personnel_selectionne == Some(p.id);
-                        let txt = if sel {
-                            egui::RichText::new(p.nom_complet())
-                                .size(13.5)
-                                .color(theme::ACCENT)
-                                .strong()
+    egui::ScrollArea::vertical()
+        .id_source("bilan_personnel_scroll")
+        .max_height(hauteur_liste)
+        .auto_shrink([false, false])
+        .show_rows(
+            ui,
+            HAUTEUR_LIGNE_PERSONNEL,
+            personnel.len(),
+            |ui, range| {
+                for i in range {
+                    let p = &personnel[i];
+                    let sel = state.personnel_selectionne == Some(p.id);
+                    let txt = if sel {
+                        egui::RichText::new(p.nom_complet())
+                            .size(13.5)
+                            .color(theme::ACCENT)
+                            .strong()
+                    } else {
+                        egui::RichText::new(p.nom_complet())
+                            .size(13.5)
+                            .color(theme::TEXTE)
+                    };
+                    if ui.selectable_label(sel, txt).clicked() {
+                        if sel {
+                            state.personnel_selectionne = None;
+                            state.date_detaillee = None;
+                            state.cache_personnel_id = None;
                         } else {
-                            egui::RichText::new(p.nom_complet())
-                                .size(13.5)
-                                .color(theme::TEXTE)
-                        };
-                        if ui.selectable_label(sel, txt).clicked() {
-                            if sel {
-                                state.personnel_selectionne = None;
-                                state.date_detaillee = None;
-                                state.cache_personnel_id = None;
-                            } else {
-                                state.personnel_selectionne = Some(p.id);
-                                state.date_detaillee = None;
-                                state.cache_personnel_id = None;
-                            }
+                            state.personnel_selectionne = Some(p.id);
+                            state.date_detaillee = None;
+                            state.cache_personnel_id = None;
                         }
                     }
-                },
-            );
-    });
+                }
+            },
+        );
 }
 
 fn colonne_droite(
@@ -186,26 +221,24 @@ fn colonne_droite(
     state: &mut BilanState,
     hauteur: f32,
 ) {
-    theme::carte(ui, |ui| {
-        ui.set_min_height(hauteur);
-        ui.set_max_height(hauteur);
+    ui.set_min_height(hauteur);
+    ui.set_max_height(hauteur);
 
-        egui::ScrollArea::vertical()
-            .id_source("bilan_droite_scroll")
-            .max_height(hauteur)
-            .auto_shrink([false, false])
-            .show(ui, |ui| match state.personnel_selectionne {
-                None => afficher_classement(ui, db, personnel, state),
-                Some(id) => {
-                    if let Some(p) = personnel.iter().find(|p| p.id == id).cloned() {
-                        afficher_bilan_perso(ui, db, &p, state);
-                    } else {
-                        state.personnel_selectionne = None;
-                        afficher_classement(ui, db, personnel, state);
-                    }
+    egui::ScrollArea::vertical()
+        .id_source("bilan_droite_scroll")
+        .max_height(hauteur)
+        .auto_shrink([false, false])
+        .show(ui, |ui| match state.personnel_selectionne {
+            None => afficher_classement(ui, db, personnel, state),
+            Some(id) => {
+                if let Some(p) = personnel.iter().find(|p| p.id == id).cloned() {
+                    afficher_bilan_perso(ui, db, &p, state);
+                } else {
+                    state.personnel_selectionne = None;
+                    afficher_classement(ui, db, personnel, state);
                 }
-            });
-    });
+            }
+        });
 }
 
 fn afficher_classement(
@@ -242,7 +275,7 @@ fn afficher_classement(
         ui.vertical_centered(|ui| {
             ui.add_space(40.0);
             ui.label(
-                egui::RichText::new("Aucun personnel enregistré")
+                egui::RichText::new("Aucun personnel enregistre")
                     .size(13.0)
                     .color(theme::TEXTE_SECONDAIRE),
             );
@@ -476,6 +509,105 @@ fn badge_note(note: f64) -> (String, egui::Color32, egui::Color32) {
     }
 }
 
+fn ferie_jour_entier(feries: &HashMap<u32, Vec<String>>, jour: u32) -> bool {
+    feries
+        .get(&jour)
+        .map(|v| v.iter().any(|p| p == "jour"))
+        .unwrap_or(false)
+}
+
+fn ferie_periode(feries: &HashMap<u32, Vec<String>>, jour: u32, periode: &str) -> bool {
+    feries
+        .get(&jour)
+        .map(|v| v.iter().any(|p| p == periode))
+        .unwrap_or(false)
+}
+
+fn calculer_note_matin_10(pt: &EnregistrementPointage) -> Option<f64> {
+    let arrivee = pt.matin_arrivee;
+    let depart = pt.matin_sortie;
+    if arrivee.is_none() && depart.is_none() {
+        return None;
+    }
+    let limite_arrivee = NaiveTime::from_hms_opt(8, 15, 0).unwrap();
+    let limite_depart = NaiveTime::from_hms_opt(11, 45, 0).unwrap();
+    let mut points = 0.0;
+    if let Some(a) = arrivee {
+        if a <= limite_arrivee {
+            points += 5.0;
+        }
+    }
+    if let Some(d) = depart {
+        if d >= limite_depart {
+            points += 5.0;
+        }
+    }
+    Some(points)
+}
+
+fn calculer_note_apres_midi_10(pt: &EnregistrementPointage) -> Option<f64> {
+    let arrivee = pt.apres_midi_arrivee;
+    let depart = pt.apres_midi_sortie;
+    if arrivee.is_none() && depart.is_none() {
+        return None;
+    }
+    let limite_arrivee = NaiveTime::from_hms_opt(14, 15, 0).unwrap();
+    let limite_depart = NaiveTime::from_hms_opt(15, 45, 0).unwrap();
+    let mut points = 0.0;
+    if let Some(a) = arrivee {
+        if a <= limite_arrivee {
+            points += 5.0;
+        }
+    }
+    if let Some(d) = depart {
+        if d >= limite_depart {
+            points += 5.0;
+        }
+    }
+    Some(points)
+}
+
+fn note_effective(
+    pt: &EnregistrementPointage,
+    feries: &HashMap<u32, Vec<String>>,
+    jour: u32,
+) -> Option<f64> {
+    if ferie_jour_entier(feries, jour) {
+        return None;
+    }
+    let matin_ferie = ferie_periode(feries, jour, "matin");
+    let aprem_ferie = ferie_periode(feries, jour, "aprem");
+
+    let note_m = if matin_ferie {
+        None
+    } else {
+        calculer_note_matin_10(pt)
+    };
+    let note_a = if aprem_ferie {
+        None
+    } else {
+        calculer_note_apres_midi_10(pt)
+    };
+
+    let mut max = 0.0;
+    if !matin_ferie {
+        max += 10.0;
+    }
+    if !aprem_ferie {
+        max += 10.0;
+    }
+    if max <= 0.0 {
+        return None;
+    }
+
+    match (note_m, note_a) {
+        (None, None) => None,
+        (Some(m), None) => Some((m / max) * 20.0),
+        (None, Some(a)) => Some((a / max) * 20.0),
+        (Some(m), Some(a)) => Some(((m + a) / max) * 20.0),
+    }
+}
+
 fn calculer_classement(
     db: &Database,
     personnel: &[Personnel],
@@ -495,10 +627,7 @@ fn calculer_classement(
             let mut compte = 0_usize;
             for pt in pointages.iter().filter(|pt| pt.personnel_id == p.id) {
                 let jour = pt.date_pointage.day();
-                if ferie_jour_entier(feries, jour) {
-                    continue;
-                }
-                if let Some(n) = calculer_total_jour_20(pt) {
+                if let Some(n) = note_effective(pt, feries, jour) {
                     somme += n;
                     compte += 1;
                 }
@@ -584,7 +713,7 @@ fn afficher_bilan_perso(
 
     ui.label(
         egui::RichText::new(format!(
-            "Jours pointés ce mois : {} / {}",
+            "Jours pointes ce mois : {} / {}",
             state.cache_jours_pointes.len(),
             nb
         ))
@@ -608,17 +737,19 @@ fn afficher_bilan_perso(
             let pointe = jours_pointes_set.contains(&j);
             let detail = state.date_detaillee == Some(date);
 
-            let ferie_jour = ferie_jour_entier(&feries, j);
-            let ferie_matin = ferie_periode(&feries, j, "matin");
-            let ferie_aprem = ferie_periode(&feries, j, "aprem");
+            let ferie_j = ferie_jour_entier(&feries, j);
+            let ferie_m = ferie_periode(&feries, j, "matin");
+            let ferie_a = ferie_periode(&feries, j, "aprem");
 
-            let note = dict.get(&date).and_then(calculer_total_jour_20);
+            let note = dict
+                .get(&date)
+                .and_then(|pt| note_effective(pt, &feries, j));
 
             let (fond, texte) = if detail {
                 (theme::ACCENT, egui::Color32::WHITE)
-            } else if ferie_jour {
+            } else if ferie_j {
                 (theme::WARNING, egui::Color32::WHITE)
-            } else if ferie_matin || ferie_aprem {
+            } else if ferie_m || ferie_a {
                 (theme::FERIE_DEMI_BG, theme::WARNING)
             } else if !pointe {
                 (theme::FOND, theme::PRIMAIRE)
@@ -642,7 +773,7 @@ fn afficher_bilan_perso(
                     egui::FontId::proportional(17.0),
                     texte,
                 );
-                if (ferie_matin || ferie_aprem) && !ferie_jour {
+                if (ferie_m || ferie_a) && !ferie_j {
                     ui.painter().text(
                         egui::pos2(rect.right() - 5.0, rect.top() + 3.0),
                         egui::Align2::RIGHT_TOP,
@@ -680,7 +811,7 @@ fn afficher_bilan_perso(
             continue;
         }
 
-        match dict.get(&date).and_then(calculer_total_jour_20) {
+        match dict.get(&date).and_then(|pt| note_effective(pt, &feries, j)) {
             Some(n) if n >= 16.0 => bien += 1,
             Some(n) if n >= 10.0 => moyen += 1,
             Some(_) => mauvais += 1,
@@ -707,21 +838,21 @@ fn afficher_bilan_perso(
         let j = d.day();
         if ferie_jour_entier(&feries, j) {
             ui.label(
-                egui::RichText::new("Jour férié (jour entier)")
+                egui::RichText::new("Jour ferie (jour entier)")
                     .size(12.5)
                     .color(theme::WARNING)
                     .strong(),
             );
         } else if ferie_periode(&feries, j, "matin") {
             ui.label(
-                egui::RichText::new("Matin férié")
+                egui::RichText::new("Matin ferie")
                     .size(12.5)
                     .color(theme::WARNING)
                     .strong(),
             );
         } else if ferie_periode(&feries, j, "aprem") {
             ui.label(
-                egui::RichText::new("Après-midi férié")
+                egui::RichText::new("Apres-midi ferie")
                     .size(12.5)
                     .color(theme::WARNING)
                     .strong(),
@@ -731,23 +862,37 @@ fn afficher_bilan_perso(
         match dict.get(&d) {
             None => {
                 if !ferie_jour_entier(&feries, j) {
-                    ui.label("Aucun pointage enregistré pour cette date.");
+                    ui.label("Aucun pointage enregistre pour cette date.");
                 }
             }
             Some(pt) => {
-                let note_m = calculer_note_matin_10(pt)
+                let matin_ferie = ferie_periode(&feries, j, "matin");
+                let aprem_ferie = ferie_periode(&feries, j, "aprem");
+                let note_m = if matin_ferie {
+                    None
+                } else {
+                    calculer_note_matin_10(pt)
+                };
+                let note_a = if aprem_ferie {
+                    None
+                } else {
+                    calculer_note_apres_midi_10(pt)
+                };
+                let total_j = note_effective(pt, &feries, j);
+
+                let note_m_txt = note_m
                     .map(|n| format!("{:.0}/10", n))
                     .unwrap_or_else(|| "- /10".into());
-                let note_a = calculer_note_apres_midi_10(pt)
+                let note_a_txt = note_a
                     .map(|n| format!("{:.0}/10", n))
                     .unwrap_or_else(|| "- /10".into());
-                let total_j = calculer_total_jour_20(pt)
+                let total_txt = total_j
                     .map(|n| format!("{:.0}/20", n))
                     .unwrap_or_else(|| "- /20".into());
 
-                ui.label(format!("Matin : {}", note_m));
-                ui.label(format!("Après-midi : {}", note_a));
-                ui.label(format!("Total du jour : {}", total_j));
+                ui.label(format!("Matin : {}", note_m_txt));
+                ui.label(format!("Apres-midi : {}", note_a_txt));
+                ui.label(format!("Total du jour : {}", total_txt));
 
                 if let Some(o) = &pt.observation {
                     if !o.is_empty() {
@@ -794,8 +939,8 @@ fn barre_mois(ui: &mut egui::Ui, state: &mut BilanState) {
         ui.add_space(10.0);
 
         let mois_fr = [
-            "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août",
-            "Septembre", "Octobre", "Novembre", "Décembre",
+            "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin", "Juillet", "Aout",
+            "Septembre", "Octobre", "Novembre", "Decembre",
         ];
         ui.label(
             egui::RichText::new(format!(
@@ -808,20 +953,6 @@ fn barre_mois(ui: &mut egui::Ui, state: &mut BilanState) {
             .strong(),
         );
     });
-}
-
-fn ferie_jour_entier(feries: &HashMap<u32, Vec<String>>, jour: u32) -> bool {
-    feries
-        .get(&jour)
-        .map(|v| v.iter().any(|p| p == "jour"))
-        .unwrap_or(false)
-}
-
-fn ferie_periode(feries: &HashMap<u32, Vec<String>>, jour: u32, periode: &str) -> bool {
-    feries
-        .get(&jour)
-        .map(|v| v.iter().any(|p| p == periode))
-        .unwrap_or(false)
 }
 
 fn est_week_end(d: NaiveDate) -> bool {
@@ -857,65 +988,6 @@ fn graphique_barres(ui: &mut egui::Ui, bien: i32, moyen: i32, mauvais: i32, abse
                 theme::TEXTE,
             );
         });
-    }
-}
-
-fn calculer_note_matin_10(pt: &EnregistrementPointage) -> Option<f64> {
-    let arrivee = pt.matin_arrivee;
-    let depart = pt.matin_sortie;
-    if arrivee.is_none() && depart.is_none() {
-        return None;
-    }
-
-    let limite_arrivee = NaiveTime::from_hms_opt(8, 15, 0).unwrap();
-    let limite_depart = NaiveTime::from_hms_opt(11, 45, 0).unwrap();
-
-    let mut points = 0.0;
-    if let Some(a) = arrivee {
-        if a <= limite_arrivee {
-            points += 5.0;
-        }
-    }
-    if let Some(d) = depart {
-        if d >= limite_depart {
-            points += 5.0;
-        }
-    }
-    Some(points)
-}
-
-fn calculer_note_apres_midi_10(pt: &EnregistrementPointage) -> Option<f64> {
-    let arrivee = pt.apres_midi_arrivee;
-    let depart = pt.apres_midi_sortie;
-    if arrivee.is_none() && depart.is_none() {
-        return None;
-    }
-
-    let limite_arrivee = NaiveTime::from_hms_opt(14, 15, 0).unwrap();
-    let limite_depart = NaiveTime::from_hms_opt(15, 45, 0).unwrap();
-
-    let mut points = 0.0;
-    if let Some(a) = arrivee {
-        if a <= limite_arrivee {
-            points += 5.0;
-        }
-    }
-    if let Some(d) = depart {
-        if d >= limite_depart {
-            points += 5.0;
-        }
-    }
-    Some(points)
-}
-
-fn calculer_total_jour_20(pt: &EnregistrementPointage) -> Option<f64> {
-    let m = calculer_note_matin_10(pt);
-    let a = calculer_note_apres_midi_10(pt);
-    match (m, a) {
-        (Some(n1), Some(n2)) => Some(n1 + n2),
-        (Some(n1), None) => Some(n1),
-        (None, Some(n2)) => Some(n2),
-        (None, None) => None,
     }
 }
 

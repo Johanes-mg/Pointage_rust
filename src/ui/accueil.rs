@@ -4,7 +4,7 @@ use crate::theme;
 use chrono::{Datelike, Local, NaiveDate};
 use std::time::{Duration, Instant};
 
-const DUREE_MESSAGE: Duration = Duration::from_secs(10);
+const DUREE_MESSAGE: Duration = Duration::from_secs(8);
 
 pub struct AccueilState {
     pub message: String,
@@ -57,37 +57,43 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
     state.purger_message_si_expire();
 
     let hauteur_pleine = ui.available_height().max(500.0);
-    let largeur_totale = ui.available_width();
-    let largeur_gauche = (largeur_totale * 0.42).max(420.0);
-    let largeur_droite = largeur_totale - largeur_gauche - 16.0;
+    let dispo = ui.available_width();
+    let ecart = 16.0_f32;
+    let seuil = 660.0_f32;
 
-    ui.horizontal_top(|ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(largeur_gauche, hauteur_pleine),
-            egui::Layout::top_down(egui::Align::LEFT),
-            |ui| {
-                calendrier_gauche(ui, state);
-            },
-        );
+    if dispo < seuil {
+        calendrier_gauche(ui, state);
+        ui.add_space(ecart);
+        panneau_droit(ui, db, state);
+    } else {
+        let largeur_droite = (dispo * 0.58).max(360.0);
+        let largeur_gauche = (dispo - largeur_droite - ecart).max(320.0);
+        let largeur_droite = dispo - largeur_gauche - ecart;
 
-        ui.add_space(16.0);
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(largeur_gauche, hauteur_pleine),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    calendrier_gauche(ui, state);
+                },
+            );
 
-        ui.allocate_ui_with_layout(
-            egui::vec2(largeur_droite, hauteur_pleine),
-            egui::Layout::top_down(egui::Align::LEFT),
-            |ui| {
-                panneau_droit(ui, db, state);
-            },
-        );
-    });
+            ui.add_space(ecart);
+
+            ui.allocate_ui_with_layout(
+                egui::vec2(largeur_droite, hauteur_pleine),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    panneau_droit(ui, db, state);
+                },
+            );
+        });
+    }
 
     ui.ctx()
         .request_repaint_after(Duration::from_millis(500));
 }
-
-// ---------------------------------------------------------------------------
-// Colonne gauche : calendrier
-// ---------------------------------------------------------------------------
 
 fn calendrier_gauche(ui: &mut egui::Ui, state: &mut AccueilState) {
     theme::carte(ui, |ui| {
@@ -125,8 +131,8 @@ fn calendrier_gauche(ui: &mut egui::Ui, state: &mut AccueilState) {
             ui.add_space(10.0);
 
             let mois_fr = [
-                "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août",
-                "Septembre", "Octobre", "Novembre", "Décembre",
+                "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin", "Juillet", "Aout",
+                "Septembre", "Octobre", "Novembre", "Decembre",
             ];
             ui.label(
                 egui::RichText::new(format!(
@@ -284,25 +290,21 @@ fn appliquer_selection(state: &mut AccueilState, d: NaiveDate) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Colonne droite : une seule carte, sections séparées
-// ---------------------------------------------------------------------------
-
 fn panneau_droit(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
     theme::carte(ui, |ui| {
         ui.set_width(ui.available_width());
 
         section_horloge(ui);
 
-        ui.add_space(20.0);
+        ui.add_space(24.0);
         theme::separateur(ui);
-        ui.add_space(20.0);
+        ui.add_space(24.0);
 
         section_export_rapide(ui, db, state);
 
-        ui.add_space(20.0);
+        ui.add_space(24.0);
         theme::separateur(ui);
-        ui.add_space(20.0);
+        ui.add_space(24.0);
 
         section_export_plage(ui, db, state);
 
@@ -319,8 +321,8 @@ fn section_horloge(ui: &mut egui::Ui) {
         "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche",
     ];
     let mois_fr = [
-        "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
-        "septembre", "octobre", "novembre", "décembre",
+        "janvier", "fevrier", "mars", "avril", "mai", "juin", "juillet", "aout",
+        "septembre", "octobre", "novembre", "decembre",
     ];
     let jour_nom = jours_fr[now.weekday().num_days_from_monday() as usize];
     let mois_nom = mois_fr[now.month0() as usize];
@@ -353,22 +355,17 @@ fn section_horloge(ui: &mut egui::Ui) {
 }
 
 fn section_export_rapide(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
-    sous_titre(ui, "Export rapide", "Pour aujourd'hui");
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(
-            "Exporte le personnel, les pointages et le bilan de la journée en cours.",
-        )
-        .size(12.0)
-        .color(theme::TEXTE_SECONDAIRE),
-    );
+    sous_titre(ui, "Export rapide");
+
     ui.add_space(12.0);
 
-    if theme::bouton_image_texte(ui, "exporter.png", "Exporter en Excel", 280.0, 44.0) {
+    let largeur = ui.available_width();
+
+    if theme::bouton_image_texte(ui, "exporter.png", "Exporter aujourd'hui", largeur, 44.0) {
         let t = Local::now().date_naive();
         match excel_export::exporter_tout(db, t, t) {
             Ok(chemin) => {
-                state.afficher_message(format!("Export réussi : {}", chemin), true);
+                state.afficher_message(format!("Export reussi : {}", chemin), true);
             }
             Err(e) => {
                 state.afficher_message(format!("Erreur : {}", e), false);
@@ -378,77 +375,35 @@ fn section_export_rapide(ui: &mut egui::Ui, db: &Database, state: &mut AccueilSt
 }
 
 fn section_export_plage(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
-    sous_titre(ui, "Export par plage", "Choisissez deux dates");
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(
-            "Cliquez un premier jour pour la date de début, un second pour la date de fin.",
-        )
-        .size(12.0)
-        .color(theme::TEXTE_SECONDAIRE),
-    );
+    sous_titre(ui, "Export par plage");
 
     ui.add_space(16.0);
 
-    // --- Ligne d'aperçu (Début → Fin) ---
     ui.horizontal(|ui| {
         champ_date(
             ui,
-            "DÉBUT",
+            "DU",
             state.date_debut,
             theme::SELECTION_JOUR,
             theme::PRIMAIRE,
         );
 
-        ui.add_space(8.0);
+        ui.add_space(10.0);
         ui.label(
-            egui::RichText::new("→")
+            egui::RichText::new("-")
                 .size(16.0)
                 .color(theme::TEXTE_SECONDAIRE),
         );
-        ui.add_space(8.0);
+        ui.add_space(10.0);
 
         champ_date(
             ui,
-            "FIN",
+            "AU",
             state.date_fin,
             theme::JOUR_BIEN_BG,
             theme::SUCCES,
         );
-    });
 
-    // --- Résumé de la plage ---
-    ui.add_space(10.0);
-    ui.horizontal(|ui| {
-        match (state.date_debut, state.date_fin) {
-            (Some(d), Some(f)) => {
-                let nb = (f - d).num_days() + 1;
-                let texte = if nb == 1 {
-                    "Plage : 1 jour".to_string()
-                } else {
-                    format!("Plage : {} jours", nb)
-                };
-                theme::badge(ui, &texte, theme::FOND_BILAN, theme::PRIMAIRE);
-            }
-            (Some(_), None) => {
-                theme::badge(
-                    ui,
-                    "Sélectionnez la date de fin",
-                    theme::JOUR_MOYEN_BG,
-                    theme::WARNING,
-                );
-            }
-            _ => {
-                theme::badge(
-                    ui,
-                    "Aucune date sélectionnée",
-                    theme::FOND,
-                    theme::TEXTE_SECONDAIRE,
-                );
-            }
-        }
-
-        // Bouton réinitialiser compact, aligné à droite
         if state.date_debut.is_some() || state.date_fin.is_some() {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if theme::bouton_image_seule(ui, "effacer.png", 32.0, 16.0) {
@@ -459,36 +414,35 @@ fn section_export_plage(ui: &mut egui::Ui, db: &Database, state: &mut AccueilSta
         }
     });
 
-    ui.add_space(14.0);
+    ui.add_space(16.0);
 
-    // --- Bouton d'export (pleine largeur, désactivé si pas prêt) ---
     let pret = matches!((state.date_debut, state.date_fin), (Some(_), Some(_)));
-    let largeur_bouton = (ui.available_width() - 8.0).max(240.0);
+    let largeur = ui.available_width();
 
-    let mut clique_export = false;
+    let mut clique = false;
     if pret {
-        clique_export = theme::bouton_image_texte(
+        clique = theme::bouton_image_texte(
             ui,
             "exporter.png",
-            "Exporter telles dates",
-            largeur_bouton,
+            "Exporter la plage",
+            largeur,
             44.0,
         );
     } else {
         bouton_desactive(
             ui,
             "exporter.png",
-            "Exporter telles dates",
-            largeur_bouton,
+            "Exporter la plage",
+            largeur,
             44.0,
         );
     }
 
-    if clique_export {
+    if clique {
         if let (Some(d), Some(f)) = (state.date_debut, state.date_fin) {
             match excel_export::exporter_tout(db, d, f) {
                 Ok(chemin) => {
-                    state.afficher_message(format!("Export réussi : {}", chemin), true);
+                    state.afficher_message(format!("Export reussi : {}", chemin), true);
                 }
                 Err(e) => {
                     state.afficher_message(format!("Erreur : {}", e), false);
@@ -499,18 +453,10 @@ fn section_export_plage(ui: &mut egui::Ui, db: &Database, state: &mut AccueilSta
 }
 
 fn section_message(ui: &mut egui::Ui, texte: &str, ok: bool) {
-    let (fond, couleur, icone) = if ok {
-        (
-            egui::Color32::from_rgb(209, 250, 229),
-            theme::SUCCES,
-            "✓",
-        )
+    let (fond, couleur) = if ok {
+        (egui::Color32::from_rgb(209, 250, 229), theme::SUCCES)
     } else {
-        (
-            egui::Color32::from_rgb(254, 226, 226),
-            theme::DANGER,
-            "✗",
-        )
+        (egui::Color32::from_rgb(254, 226, 226), theme::DANGER)
     };
 
     egui::Frame::none()
@@ -519,39 +465,17 @@ fn section_message(ui: &mut egui::Ui, texte: &str, ok: bool) {
         .inner_margin(egui::Margin::symmetric(12.0, 10.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(icone)
-                        .size(14.0)
-                        .color(couleur)
-                        .strong(),
-                );
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(texte).size(12.5).color(couleur));
-            });
+            ui.label(egui::RichText::new(texte).size(12.5).color(couleur));
         });
 }
 
-// ---------------------------------------------------------------------------
-// Sous-composants
-// ---------------------------------------------------------------------------
-
-fn sous_titre(ui: &mut egui::Ui, principal: &str, secondaire: &str) {
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(principal)
-                .size(14.5)
-                .color(theme::PRIMAIRE)
-                .strong(),
-        );
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new(secondaire)
-                .size(12.0)
-                .color(theme::TEXTE_SECONDAIRE)
-                .italics(),
-        );
-    });
+fn sous_titre(ui: &mut egui::Ui, texte: &str) {
+    ui.label(
+        egui::RichText::new(texte)
+            .size(14.5)
+            .color(theme::PRIMAIRE)
+            .strong(),
+    );
 }
 
 fn champ_date(
@@ -594,7 +518,7 @@ fn champ_date(
                     .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                     .show(ui, |ui| {
                         ui.label(
-                            egui::RichText::new("—")
+                            egui::RichText::new("-")
                                 .size(13.0)
                                 .color(theme::TEXTE_SECONDAIRE),
                         );

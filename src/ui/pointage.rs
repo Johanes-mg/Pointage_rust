@@ -63,20 +63,6 @@ impl PointageState {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Mise en page principale
-// ---------------------------------------------------------------------------
-//
-// On calcule les largeurs à partir de l'espace réellement disponible à
-// l'intérieur du panneau central (déjà amputé des marges de 30 px de
-// main_window.rs). On impose :
-//   * une largeur minimum au calendrier :  340 px
-//   * une largeur minimum à la liste    :  320 px
-//   * un écart fixe de 16 px entre les deux
-//
-// Si la fenêtre est trop étroite pour tout tenir, on bascule en colonne
-// unique (le calendrier au-dessus, la liste en dessous) pour ne rien perdre.
-//
 pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
     ui.label(
         egui::RichText::new("Pointage")
@@ -88,20 +74,17 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
 
     let dispo = ui.available_width();
     let ecart = 16.0_f32;
-
     let largeur_gauche_min = 340.0_f32;
     let largeur_droite_min = 320.0_f32;
     let seuil_deux_colonnes = largeur_gauche_min + ecart + largeur_droite_min;
 
     if dispo < seuil_deux_colonnes {
-        // Pas assez de place : on empile verticalement.
         calendrier_gauche(ui, db, state);
         ui.add_space(16.0);
         employes_droite(ui, db, state);
         return;
     }
 
-    // Répartition : la gauche prend 42% mais n'écrase jamais la droite.
     let mut largeur_gauche = (dispo * 0.42).max(largeur_gauche_min);
     let mut largeur_droite = dispo - largeur_gauche - ecart;
 
@@ -133,7 +116,6 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
 
 fn charger_stats_mois(db: &Database, state: &mut PointageState) {
     let cle = (state.mois_affiche.year(), state.mois_affiche.month());
-
     if state.cache_mois != Some(cle) {
         state.stats_mois = db
             .get_statistiques_mois(cle.0, cle.1)
@@ -153,6 +135,11 @@ fn charger_ferie_jour(db: &Database, state: &mut PointageState) {
 }
 
 fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
+    if state.rafraichir {
+        state.cache_date_pointages = None;
+        state.rafraichir = false;
+    }
+
     let date_changee = state.cache_date_pointages != Some(state.date_selectionnee);
 
     if !date_changee {
@@ -206,7 +193,6 @@ fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
         }
     }
     state.cache_date_pointages = Some(state.date_selectionnee);
-    state.rafraichir = false;
 }
 
 fn prochaine_periode(courante: Option<&str>) -> Option<&'static str> {
@@ -221,11 +207,11 @@ fn prochaine_periode(courante: Option<&str>) -> Option<&'static str> {
 
 fn libelle_bouton_ferie(courante: Option<&str>) -> &'static str {
     match courante {
-        None => "Marquer férié (jour)",
-        Some("jour") => "Férié -> Matin",
-        Some("matin") => "Férié -> Après-midi",
-        Some("aprem") => "Retirer férié",
-        _ => "Marquer férié (jour)",
+        None => "Marquer ferie (jour)",
+        Some("jour") => "Ferie -> Matin",
+        Some("matin") => "Ferie -> Apres-midi",
+        Some("aprem") => "Retirer ferie",
+        _ => "Marquer ferie (jour)",
     }
 }
 
@@ -254,6 +240,25 @@ fn appliquer_transition_ferie(
     prochaine_periode(courante).map(|s| s.to_string())
 }
 
+fn ajuster_date_selectionnee(state: &mut PointageState) {
+    if state.mois_affiche.year() != state.date_selectionnee.year()
+        || state.mois_affiche.month() != state.date_selectionnee.month()
+    {
+        state.date_selectionnee = state.mois_affiche;
+        state.cache_ferie_date = None;
+        state.rafraichir = true;
+    }
+}
+
+fn ferie_bloque_periode(ferie_jour: Option<&str>, matin: bool) -> bool {
+    match ferie_jour {
+        Some("jour") => true,
+        Some("matin") => matin,
+        Some("aprem") => !matin,
+        _ => false,
+    }
+}
+
 fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
     charger_stats_mois(db, state);
     charger_ferie_jour(db, state);
@@ -269,16 +274,19 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                     1,
                 )
                 .unwrap();
+                ajuster_date_selectionnee(state);
             }
             ui.add_space(4.0);
             if theme::bouton_image_seule(ui, "mois_gauche.png", 40.0, 22.0) {
                 let (y, m) = precedente(state.mois_affiche);
                 state.mois_affiche = NaiveDate::from_ymd_opt(y, m, 1).unwrap();
+                ajuster_date_selectionnee(state);
             }
             ui.add_space(4.0);
             if theme::bouton_image_seule(ui, "mois_droite.png", 40.0, 22.0) {
                 let (y, m) = suivante(state.mois_affiche);
                 state.mois_affiche = NaiveDate::from_ymd_opt(y, m, 1).unwrap();
+                ajuster_date_selectionnee(state);
             }
             ui.add_space(4.0);
             if theme::bouton_image_seule(ui, "annee_droite.png", 40.0, 22.0) {
@@ -288,13 +296,14 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                     1,
                 )
                 .unwrap();
+                ajuster_date_selectionnee(state);
             }
 
             ui.add_space(10.0);
 
             let mois_fr = [
-                "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août",
-                "Septembre", "Octobre", "Novembre", "Décembre",
+                "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin", "Juillet", "Aout",
+                "Septembre", "Octobre", "Novembre", "Decembre",
             ];
             ui.label(
                 egui::RichText::new(format!(
@@ -342,7 +351,6 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
         ui.add_space(4.0);
 
         let nb_jours = jours_dans_mois(state.mois_affiche.year(), state.mois_affiche.month());
-
         let premier = NaiveDate::from_ymd_opt(
             state.mois_affiche.year(),
             state.mois_affiche.month(),
@@ -370,7 +378,6 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                         ui.add_sized([largeur_case, 46.0], egui::Label::new(""));
                         continue;
                     }
-
                     if jour_courant > nb_jours {
                         ui.add_sized([largeur_case, 46.0], egui::Label::new(""));
                         continue;
@@ -422,7 +429,11 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                     if ui.is_rect_visible(rect) {
                         let painter = ui.painter();
                         painter.rect_filled(rect, theme::r_sm(), fond);
-                        painter.rect_stroke(rect, theme::r_sm(), egui::Stroke::new(1.0_f32, bordure));
+                        painter.rect_stroke(
+                            rect,
+                            theme::r_sm(),
+                            egui::Stroke::new(1.0_f32, bordure),
+                        );
                         painter.text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
@@ -462,7 +473,6 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
         theme::separateur(ui);
         ui.add_space(12.0);
 
-        // ----- Bloc "Jour férié" encadré -----
         egui::Frame::none()
             .fill(theme::FOND)
             .rounding(theme::r_md())
@@ -473,7 +483,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
 
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("Jour férié :")
+                        egui::RichText::new("Jour ferie :")
                             .size(12.0)
                             .color(theme::TEXTE_SECONDAIRE)
                             .strong(),
@@ -481,7 +491,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                     let statut = match state.ferie_jour.as_deref() {
                         Some("jour") => "Jour entier",
                         Some("matin") => "Matin",
-                        Some("aprem") => "Après-midi",
+                        Some("aprem") => "Apres-midi",
                         _ => "Aucun",
                     };
                     ui.label(
@@ -513,23 +523,14 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                     state.ferie_jour = nouvelle;
                     state.cache_mois = None;
                     state.cache_ferie_date = Some(state.date_selectionnee);
+                    state.cache_date_pointages = None;
+                    state.brouillons.clear();
                     state.rafraichir = true;
                 }
             });
     });
 }
 
-// ---------------------------------------------------------------------------
-// Colonne droite
-// ---------------------------------------------------------------------------
-//
-//  * Le ScrollArea::both permet de scroller horizontalement si jamais la
-//    largeur est encore trop petite.
-//  * Les cartes ne font plus "available_width() - 32" : le Frame gère déjà
-//    ses propres marges internes.
-//  * Les 2 blocs matin / aprem passent par `ui.columns(2, ...)` sur une
-//    largeur d'au moins ~380 px, sinon on empile à la verticale.
-//
 fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
     if state.cache_personnel.is_none() {
         state.cache_personnel = Some(db.get_personnel().unwrap_or_default());
@@ -547,7 +548,9 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
         0.0
     };
 
-    // Bandeau "bilan du jour"
+    let ferie_jour = state.ferie_jour.clone();
+    let jour_ferie_entier = matches!(ferie_jour.as_deref(), Some("jour"));
+
     egui::Frame::none()
         .fill(theme::FOND_BILAN)
         .rounding(theme::r_md())
@@ -573,7 +576,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                 );
                 ui.add_space(15.0);
                 ui.label(
-                    egui::RichText::new(format!("Présents : {}", presents))
+                    egui::RichText::new(format!("Presents : {}", presents))
                         .size(12.5)
                         .color(theme::SUCCES)
                         .strong(),
@@ -601,12 +604,12 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                 );
             });
 
-            if let Some(f) = &state.ferie_jour {
+            if let Some(f) = &ferie_jour {
                 ui.add_space(6.0);
                 let txt = match f.as_str() {
-                    "jour" => "Jour férié (jour entier)",
-                    "matin" => "Matin férié",
-                    "aprem" => "Après-midi férié",
+                    "jour" => "Jour ferie (jour entier) - pointage bloque",
+                    "matin" => "Matin ferie - pointage matin bloque",
+                    "aprem" => "Apres-midi ferie - pointage apres-midi bloque",
                     _ => "",
                 };
                 ui.label(
@@ -626,22 +629,29 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
             ui.vertical_centered(|ui| {
                 ui.add_space(30.0);
                 ui.label(
-                    egui::RichText::new("Aucun personnel enregistré")
+                    egui::RichText::new("Aucun personnel enregistre")
                         .size(13.0)
                         .color(theme::TEXTE_SECONDAIRE),
                 );
                 ui.add_space(30.0);
             });
         });
-        state.rafraichir = false;
+        return;
+    }
+
+    if jour_ferie_entier {
+        ui.add_space(8.0);
+        theme::message_inline(
+            ui,
+            "Jour ferie : aucun pointage n'est autorise pour cette date.",
+            false,
+        );
         return;
     }
 
     let mut action_supprimer: Option<i64> = None;
     let mut action_enregistrer: Option<i64> = None;
 
-    // ScrollArea both : si la carte d'un employé devient trop large, un
-    // scroll horizontal apparaît au lieu de tronquer le contenu.
     egui::ScrollArea::both()
         .id_source("pointage_employes_scroll")
         .auto_shrink([false, false])
@@ -678,6 +688,9 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                             let id_matin = format!("matin_{}", p.id);
                             let id_aprem = format!("aprem_{}", p.id);
 
+                            let matin_bloque = ferie_bloque_periode(ferie_jour.as_deref(), true);
+                            let aprem_bloque = ferie_bloque_periode(ferie_jour.as_deref(), false);
+
                             let largeur = ui.available_width();
                             let bascule_deux_colonnes = largeur >= 380.0;
 
@@ -692,16 +705,18 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                                         &mut b.matin_sort,
                                         8,
                                         12,
+                                        matin_bloque,
                                     );
                                     bloc_plage(
                                         &mut cols[1],
                                         &id_aprem,
-                                        "APRÈS-MIDI",
+                                        "APRES-MIDI",
                                         &mut b.coche_aprem,
                                         &mut b.aprem_arr,
                                         &mut b.aprem_sort,
                                         14,
                                         17,
+                                        aprem_bloque,
                                     );
                                 });
                             } else {
@@ -714,17 +729,19 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                                     &mut b.matin_sort,
                                     8,
                                     12,
+                                    matin_bloque,
                                 );
                                 ui.add_space(8.0);
                                 bloc_plage(
                                     ui,
                                     &id_aprem,
-                                    "APRÈS-MIDI",
+                                    "APRES-MIDI",
                                     &mut b.coche_aprem,
                                     &mut b.aprem_arr,
                                     &mut b.aprem_sort,
                                     14,
                                     17,
+                                    aprem_bloque,
                                 );
                             }
 
@@ -784,22 +801,40 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
             }
         });
 
-    state.rafraichir = false;
-
     if let Some(id) = action_supprimer {
         let _ = db.supprimer_pointage(id, state.date_selectionnee);
         state.pointages_jour.retain(|x| *x != id);
         state.cache_mois = None;
         state.cache_date_pointages = None;
         state.brouillons.remove(&id);
+        state.rafraichir = true;
     }
 
     if let Some(id) = action_enregistrer {
         if let Some(b) = state.brouillons.get(&id).cloned() {
-            let ma = if b.coche_matin { b.matin_arr } else { None };
-            let ms = if b.coche_matin { b.matin_sort } else { None };
-            let aa = if b.coche_aprem { b.aprem_arr } else { None };
-            let as_ = if b.coche_aprem { b.aprem_sort } else { None };
+            let matin_bloque = ferie_bloque_periode(ferie_jour.as_deref(), true);
+            let aprem_bloque = ferie_bloque_periode(ferie_jour.as_deref(), false);
+
+            let ma = if b.coche_matin && !matin_bloque {
+                b.matin_arr
+            } else {
+                None
+            };
+            let ms = if b.coche_matin && !matin_bloque {
+                b.matin_sort
+            } else {
+                None
+            };
+            let aa = if b.coche_aprem && !aprem_bloque {
+                b.aprem_arr
+            } else {
+                None
+            };
+            let as_ = if b.coche_aprem && !aprem_bloque {
+                b.aprem_sort
+            } else {
+                None
+            };
             let obs = if b.observation.trim().is_empty() {
                 None
             } else {
@@ -821,6 +856,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
             state.cache_mois = None;
             state.cache_date_pointages = None;
             state.brouillons.remove(&id);
+            state.rafraichir = true;
         }
     }
 }
@@ -863,9 +899,12 @@ fn bloc_plage(
     sortie: &mut Option<NaiveTime>,
     h_defaut_arr: u32,
     h_defaut_sort: u32,
+    bloque: bool,
 ) {
     ui.push_id(id_unique, |ui| {
-        let fond = if titre == "MATIN" {
+        let fond = if bloque {
+            egui::Color32::from_rgb(245, 245, 245)
+        } else if titre == "MATIN" {
             egui::Color32::from_rgb(245, 250, 255)
         } else {
             egui::Color32::from_rgb(255, 250, 245)
@@ -877,6 +916,42 @@ fn bloc_plage(
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+
+                if bloque {
+                    if *coche {
+                        *coche = false;
+                        *arrivee = None;
+                        *sortie = None;
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(titre)
+                                .size(11.5)
+                                .color(theme::TEXTE_SECONDAIRE)
+                                .strong(),
+                        );
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new("Ferie")
+                                        .size(11.0)
+                                        .color(theme::WARNING)
+                                        .strong(),
+                                );
+                            },
+                        );
+                    });
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("Pointage bloque (jour ferie)")
+                            .size(11.5)
+                            .color(theme::TEXTE_SECONDAIRE)
+                            .italics(),
+                    );
+                    return;
+                }
 
                 let coche_avant = *coche;
 
@@ -920,11 +995,9 @@ fn bloc_plage(
                 let mut h2 = h_init_sor;
                 let mut m2 = m_init_sor;
 
-                // horizontal_wrapped : si la place manque, "Sortie" passe
-                // automatiquement à la ligne au lieu d'être tronquée.
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
-                        egui::RichText::new("Arrivée")
+                        egui::RichText::new("Arrivee")
                             .size(11.0)
                             .color(theme::TEXTE_SECONDAIRE)
                             .strong(),

@@ -82,7 +82,7 @@ fn panneau_gauche(ui: &mut egui::Ui, largeur: f32, hauteur: f32) {
                             .strong(),
                     );
                     ui.label(
-                        egui::RichText::new("Gestion des présences")
+                        egui::RichText::new("Gestion des presences")
                             .size(11.5)
                             .color(egui::Color32::from_rgb(180, 200, 225)),
                     );
@@ -92,11 +92,10 @@ fn panneau_gauche(ui: &mut egui::Ui, largeur: f32, hauteur: f32) {
                     ui.add_space(20.0);
                     puces_centre(ui, largeur_utile);
 
-                    // Espace flexible pour pousser l'illustration tout en bas
-                    let hauteur_restante = (hauteur - 340.0).max(20.0);
+                    let hauteur_bloc_haut = 340.0;
+                    let hauteur_restante = (hauteur - hauteur_bloc_haut).max(20.0);
                     ui.add_space(hauteur_restante);
 
-                    // Illustration rétablie en bas du panneau gauche
                     theme::image_ui(ui, "illustration.png", 140.0, 90.0);
                     ui.add_space(20.0);
                 },
@@ -163,8 +162,8 @@ fn panneau_droit(
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.vertical_centered(|ui| {
-                            let hauteur_estimee = if state.mode_creation { 480.0 } else { 360.0 };
-                            ui.add_space((hauteur - hauteur_estimee).max(30.0) / 2.0);
+                            let marge_haut = (hauteur * 0.08).clamp(20.0, 80.0);
+                            ui.add_space(marge_haut);
 
                             ui.allocate_ui_with_layout(
                                 egui::vec2(largeur_formulaire, 0.0),
@@ -188,7 +187,7 @@ fn formulaire(
     largeur_formulaire: f32,
 ) {
     let titre = if state.mode_creation {
-        "Créer un compte"
+        "Creer un compte"
     } else {
         "Connexion"
     };
@@ -203,7 +202,7 @@ fn formulaire(
         egui::RichText::new(if state.mode_creation {
             "Remplissez les informations ci-dessous"
         } else {
-            "Entrez vos identifiants pour accéder à l'application"
+            "Entrez vos identifiants pour acceder a l'application"
         })
         .size(13.0)
         .color(theme::TEXTE_SECONDAIRE),
@@ -304,7 +303,7 @@ fn formulaire(
     ui.add_space(8.0);
 
     let libelle = if state.mode_creation {
-        "Créer le compte"
+        "Creer le compte"
     } else {
         "Se connecter"
     };
@@ -315,9 +314,9 @@ fn formulaire(
     ui.add_space(12.0);
 
     let libelle2 = if state.mode_creation {
-        "J'ai déjà un compte"
+        "J'ai deja un compte"
     } else {
-        "Créer un nouveau compte"
+        "Creer un nouveau compte"
     };
     if bouton_secondaire(ui, libelle2, largeur_formulaire) {
         state.mode_creation = !state.mode_creation;
@@ -451,7 +450,7 @@ fn valider(db: &Database, state: &mut LoginState) -> LoginAction {
             return LoginAction::Aucune;
         }
         if state.mot_de_passe.len() < 4 {
-            state.message = "Le mot de passe doit contenir au moins 4 caractères.".into();
+            state.message = "Le mot de passe doit contenir au moins 4 caracteres.".into();
             state.message_ok = false;
             return LoginAction::Aucune;
         }

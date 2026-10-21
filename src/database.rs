@@ -1,6 +1,6 @@
 use crate::models::*;
 use crate::securite;
-use chrono::{NaiveDate, NaiveTime};
+use chrono::{Datelike, NaiveDate, NaiveTime};
 use rusqlite::{params, Connection};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -17,6 +17,7 @@ pub struct ExportSnapshot {
     pub personnel: Vec<Personnel>,
     pub pointages: Vec<EnregistrementPointage>,
     pub bilan: Vec<BilanPersonnel>,
+    pub feries: HashMap<String, Vec<String>>,
     pub nom_entreprise: String,
 }
 
@@ -35,11 +36,6 @@ impl Database {
 
     pub fn init_dossier(&self) -> Result<(), String> {
         std::fs::create_dir_all(&self.dossier).map_err(|e| e.to_string())
-    }
-
-    #[allow(dead_code)]
-    pub fn dossier_donnees(&self) -> &PathBuf {
-        &self.dossier
     }
 
     pub fn normaliser_utilisateur(nom: &str) -> String {
@@ -135,27 +131,6 @@ impl Database {
             .as_ref()
             .ok_or_else(|| "Aucune session ouverte".to_string())?;
         f(conn)
-    }
-
-    #[allow(dead_code)]
-    pub fn avec_transaction<F, R>(&self, f: F) -> Result<R, String>
-    where
-        F: FnOnce(&Connection) -> Result<R, String>,
-    {
-        self.with_conn(|conn| {
-            conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
-            let r = f(conn);
-            match r {
-                Ok(v) => {
-                    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
-                    Ok(v)
-                }
-                Err(e) => {
-                    let _ = conn.execute_batch("ROLLBACK");
-                    Err(e)
-                }
-            }
-        })
     }
 
     fn creer_tables(conn: &Connection) -> Result<(), String> {
@@ -873,6 +848,176 @@ impl Database {
         iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
+    pub fn get_classement_periode(
+        &self,
+        debut: NaiveDate,
+        fin: NaiveDate,
+    ) -> Result<Vec<(String, f64, usize)>, String> {
+        self.with_conn(|conn| {
+            let feries = {
+                let mut map: HashMap<u32, Vec<String>> = HashMap::new();
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT DatePointage, Periode
+                         FROM JourFerie
+                         WHERE DatePointage BETWEEN ?1 AND ?2",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let iter = stmt
+                    .query_map(
+                        params![
+                            debut.format("%Y-%m-%d").to_string(),
+                            fin.format("%Y-%m-%d").to_string()
+                        ],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                    )
+                    .map_err(|e| e.to_string())?;
+                for item in iter {
+                    let (d, p) = item.map_err(|e| e.to_string())?;
+                    if let Ok(date) = NaiveDate::parse_from_str(&d, "%Y-%m-%d") {
+                        map.entry(date.day()).or_default().push(p);
+                    }
+                }
+                map
+            };
+
+            let mut stmt = conn
+                .prepare(
+                    "SELECT p.Nom || ' ' || p.Prenom AS Nom,
+                            ep.DatePointage, ep.MatinArrivee, ep.MatinSortie,
+                            ep.ApresMidiArrivee, ep.ApresMidiSortie
+                     FROM EnregistrementPointage ep
+                     INNER JOIN Personnel p ON p.Id = ep.PersonnelId
+                     WHERE ep.DatePointage BETWEEN ?1 AND ?2
+                     ORDER BY p.Nom, p.Prenom, ep.DatePointage",
+                )
+                .map_err(|e| e.to_string())?;
+            let iter = stmt
+                .query_map(
+                    params![
+                        debut.format("%Y-%m-%d").to_string(),
+                        fin.format("%Y-%m-%d").to_string()
+                    ],
+                    |r| {
+                        let date_str: String = r.get(1)?;
+                        let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+                            .unwrap_or_else(|_| chrono::Local::now().date_naive());
+                        let parse_time = |opt: Option<String>| -> Option<NaiveTime> {
+                            opt.and_then(|s| NaiveTime::parse_from_str(&s, "%H:%M:%S").ok())
+                        };
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            date,
+                            parse_time(r.get(2)?),
+                            parse_time(r.get(3)?),
+                            parse_time(r.get(4)?),
+                            parse_time(r.get(5)?),
+                        ))
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+
+            let mut acc: HashMap<String, (f64, usize)> = HashMap::new();
+            for item in iter {
+                let (nom, date, ma, ms, aa, as_) = item.map_err(|e| e.to_string())?;
+                let jour = date.day();
+                let jour_entier = feries
+                    .get(&jour)
+                    .map(|v| v.iter().any(|p| p == "jour"))
+                    .unwrap_or(false);
+                if jour_entier {
+                    continue;
+                }
+                let matin_ferie = feries
+                    .get(&jour)
+                    .map(|v| v.iter().any(|p| p == "matin"))
+                    .unwrap_or(false);
+                let aprem_ferie = feries
+                    .get(&jour)
+                    .map(|v| v.iter().any(|p| p == "aprem"))
+                    .unwrap_or(false);
+                let mut max_jour = 0.0;
+                if !matin_ferie {
+                    max_jour += 10.0;
+                }
+                if !aprem_ferie {
+                    max_jour += 10.0;
+                }
+                if max_jour <= 0.0 {
+                    continue;
+                }
+
+                let mut pts = 0.0;
+                let mut a_matin = false;
+                let mut a_aprem = false;
+
+                if !matin_ferie && (ma.is_some() || ms.is_some()) {
+                    a_matin = true;
+                    let lim_a = NaiveTime::from_hms_opt(8, 15, 0).unwrap();
+                    let lim_s = NaiveTime::from_hms_opt(11, 45, 0).unwrap();
+                    if let Some(x) = ma {
+                        if x <= lim_a {
+                            pts += 5.0;
+                        }
+                    }
+                    if let Some(x) = ms {
+                        if x >= lim_s {
+                            pts += 5.0;
+                        }
+                    }
+                }
+                if !aprem_ferie && (aa.is_some() || as_.is_some()) {
+                    a_aprem = true;
+                    let lim_a = NaiveTime::from_hms_opt(14, 15, 0).unwrap();
+                    let lim_s = NaiveTime::from_hms_opt(15, 45, 0).unwrap();
+                    if let Some(x) = aa {
+                        if x <= lim_a {
+                            pts += 5.0;
+                        }
+                    }
+                    if let Some(x) = as_ {
+                        if x >= lim_s {
+                            pts += 5.0;
+                        }
+                    }
+                }
+
+                if !(a_matin || a_aprem) {
+                    continue;
+                }
+
+                let note20 = (pts / max_jour) * 20.0;
+                let e = acc.entry(nom).or_insert((0.0, 0));
+                e.0 += note20;
+                e.1 += 1;
+            }
+
+            let mut out: Vec<(String, f64, usize)> = acc
+                .into_iter()
+                .map(|(nom, (somme, compte))| {
+                    (
+                        nom,
+                        if compte > 0 {
+                            somme / compte as f64
+                        } else {
+                            0.0
+                        },
+                        compte,
+                    )
+                })
+                .collect();
+
+            out.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(b.2.cmp(&a.2))
+                    .then(a.0.cmp(&b.0))
+            });
+
+            Ok(out)
+        })
+    }
+
     pub fn exporter_snapshot(
         &self,
         debut: NaiveDate,
@@ -884,6 +1029,30 @@ impl Database {
                 let personnel = Self::query_personnel(conn)?;
                 let pointages = Self::query_pointages_periode(conn, debut, fin)?;
                 let bilan = Self::query_bilan(conn, debut, fin)?;
+                let feries = {
+                    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT DatePointage, Periode FROM JourFerie
+                             WHERE DatePointage BETWEEN ?1 AND ?2
+                             ORDER BY DatePointage, Periode",
+                        )
+                        .map_err(|e| e.to_string())?;
+                    let iter = stmt
+                        .query_map(
+                            params![
+                                debut.format("%Y-%m-%d").to_string(),
+                                fin.format("%Y-%m-%d").to_string()
+                            ],
+                            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    for item in iter {
+                        let (d, p) = item.map_err(|e| e.to_string())?;
+                        map.entry(d).or_default().push(p);
+                    }
+                    map
+                };
                 let nom_entreprise = conn
                     .query_row(
                         "SELECT Valeur FROM Parametre WHERE Cle='NomEntreprise'",
@@ -895,6 +1064,7 @@ impl Database {
                     personnel,
                     pointages,
                     bilan,
+                    feries,
                     nom_entreprise,
                 })
             })();
@@ -925,31 +1095,29 @@ impl Database {
     }
 
     pub fn importer_base(&self, source: &str) -> Result<(), String> {
-        let chemin = self
-            .chemin_actif
-            .borrow()
-            .clone()
-            .ok_or_else(|| "Aucune session ouverte".to_string())?;
-
-        let utilisateur = self.utilisateur_courant.borrow().clone();
-
         let source_path = PathBuf::from(source);
         if !source_path.exists() {
             return Err(format!("Fichier source introuvable : {}", source));
         }
 
         let source_canon = std::fs::canonicalize(&source_path).map_err(|e| e.to_string())?;
-        let actif_canon = if chemin.exists() {
-            std::fs::canonicalize(&chemin).map_err(|e| e.to_string())?
-        } else {
-            chemin.clone()
-        };
 
-        if source_canon == actif_canon {
-            return Err("Impossible d'importer la base active sur elle-même.".into());
+        if let Some(actif) = self.chemin_actif.borrow().clone() {
+            if let Ok(actif_canon) = std::fs::canonicalize(&actif) {
+                if actif_canon == source_canon {
+                    return Err(
+                        "Impossible d'importer la base actuellement ouverte dans elle-meme."
+                            .into(),
+                    );
+                }
+            }
         }
 
-        let verif = Connection::open(&source_canon).map_err(|e| {
+        let verif = Connection::open_with_flags(
+            &source_canon,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|e| {
             format!(
                 "Impossible d'ouvrir le fichier a importer (corrompu ?) : {}",
                 e
@@ -960,57 +1128,238 @@ impl Database {
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
                  WHERE type='table'
-                   AND name IN ('Personnel','EnregistrementPointage','Utilisateur','JourFerie')",
+                   AND name IN ('Personnel','EnregistrementPointage','JourFerie')",
                 [],
                 |r| r.get(0),
             )
             .unwrap_or(0);
-        drop(verif);
-
-        if tables_ok < 4 {
+        if tables_ok < 3 {
             return Err(
                 "Le fichier selectionne n'est pas une base Pointage valide (tables manquantes)."
                     .into(),
             );
         }
 
-        let horodatage = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-        let nom_backup = chemin
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| {
-                let base = s.trim_end_matches(".db");
-                format!("{}.backup_{}.db", base, horodatage)
-            })
-            .unwrap_or_else(|| format!("pointage.backup_{}.db", horodatage));
-        let backup_path = self.dossier.join(nom_backup);
-
-        let actuel_existe = chemin.exists();
-
-        self.fermer_session();
-
-        if actuel_existe {
-            let _ = std::fs::copy(&chemin, &backup_path);
+        let colonnes_personnel: i64 = verif
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('Personnel')
+                 WHERE name IN ('Id','Nom','Prenom','Matricule','Telephone','Adresse','Email','Statut','Grade','SituationFamiliale')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if colonnes_personnel < 10 {
+            return Err("Le fichier source a un schema Personnel incompatible.".into());
         }
 
-        for suffix in ["", "-wal", "-shm"] {
-            let p = PathBuf::from(format!("{}{}", chemin.to_string_lossy(), suffix));
-            if p.exists() {
-                std::fs::remove_file(&p).map_err(|e| {
-                    format!(
-                        "Impossible de supprimer {} (fichier verrouille ?) : {}",
-                        p.display(),
-                        e
-                    )
-                })?;
+        let colonnes_pointage: i64 = verif
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('EnregistrementPointage')
+                 WHERE name IN ('Id','PersonnelId','DatePointage','MatinArrivee','MatinSortie','ApresMidiArrivee','ApresMidiSortie','Observation')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if colonnes_pointage < 8 {
+            return Err("Le fichier source a un schema EnregistrementPointage incompatible.".into());
+        }
+
+        type LignePersonnel = (
+            i64, String, String,
+            Option<String>, Option<String>, Option<String>,
+            Option<String>, Option<String>, Option<String>, Option<String>,
+        );
+        type LignePointage = (
+            i64, i64, String,
+            Option<String>, Option<String>, Option<String>, Option<String>,
+            Option<String>,
+        );
+
+        let personnel: Vec<LignePersonnel> = {
+            let mut stmt = verif
+                .prepare(
+                    "SELECT Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale
+                     FROM Personnel ORDER BY Id",
+                )
+                .map_err(|e| e.to_string())?;
+            let iter = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
+                        r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        };
+
+        let pointages: Vec<LignePointage> = {
+            let mut stmt = verif
+                .prepare(
+                    "SELECT Id, PersonnelId, DatePointage,
+                            MatinArrivee, MatinSortie, ApresMidiArrivee, ApresMidiSortie, Observation
+                     FROM EnregistrementPointage ORDER BY Id",
+                )
+                .map_err(|e| e.to_string())?;
+            let iter = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?,
+                        r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        };
+
+        let feries: Vec<(i64, String, String)> = {
+            let mut stmt = verif
+                .prepare("SELECT Id, DatePointage, Periode FROM JourFerie ORDER BY Id")
+                .map_err(|e| e.to_string())?;
+            let iter = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map_err(|e| e.to_string())?;
+            iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        };
+
+        let parametres: Vec<(String, Option<String>)> = {
+            let existe: i64 = verif
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Parametre'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if existe == 0 {
+                Vec::new()
+            } else {
+                let mut stmt = verif
+                    .prepare("SELECT Cle, Valeur FROM Parametre")
+                    .map_err(|e| e.to_string())?;
+                let iter = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .map_err(|e| e.to_string())?;
+                iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
             }
-        }
+        };
 
-        std::fs::copy(&source_canon, &chemin).map_err(|e| e.to_string())?;
+        drop(verif);
 
-        if let Some(u) = utilisateur {
-            self.ouvrir_session(&u)?;
-        }
-        Ok(())
+        self.with_conn(|conn| {
+            conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+
+            let resultat = (|| -> Result<(), String> {
+                conn.execute("DELETE FROM EnregistrementPointage", [])
+                    .map_err(|e| e.to_string())?;
+                conn.execute("DELETE FROM JourFerie", [])
+                    .map_err(|e| e.to_string())?;
+                conn.execute("DELETE FROM Personnel", [])
+                    .map_err(|e| e.to_string())?;
+                conn.execute("DELETE FROM Parametre", [])
+                    .map_err(|e| e.to_string())?;
+
+                {
+                    let mut stmt = conn
+                        .prepare(
+                            "INSERT INTO Personnel
+                             (Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale)
+                             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                        )
+                        .map_err(|e| e.to_string())?;
+                    for p in &personnel {
+                        stmt.execute(params![
+                            p.0, p.1, p.2, p.3, p.4, p.5, p.6, p.7, p.8, p.9
+                        ])
+                        .map_err(|e| e.to_string())?;
+                    }
+                }
+
+                {
+                    let mut stmt = conn
+                        .prepare(
+                            "INSERT INTO EnregistrementPointage
+                             (Id, PersonnelId, DatePointage,
+                              MatinArrivee, MatinSortie, ApresMidiArrivee, ApresMidiSortie, Observation)
+                             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                        )
+                        .map_err(|e| e.to_string())?;
+                    for pt in &pointages {
+                        stmt.execute(params![
+                            pt.0, pt.1, pt.2, pt.3, pt.4, pt.5, pt.6, pt.7
+                        ])
+                        .map_err(|e| e.to_string())?;
+                    }
+                }
+
+                {
+                    let mut stmt = conn
+                        .prepare(
+                            "INSERT INTO JourFerie (Id, DatePointage, Periode) VALUES (?1,?2,?3)",
+                        )
+                        .map_err(|e| e.to_string())?;
+                    for f in &feries {
+                        stmt.execute(params![f.0, f.1, f.2])
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+
+                {
+                    let mut stmt = conn
+                        .prepare("INSERT INTO Parametre (Cle, Valeur) VALUES (?1,?2)")
+                        .map_err(|e| e.to_string())?;
+                    for p in &parametres {
+                        stmt.execute(params![p.0, p.1])
+                            .map_err(|e| e.to_string())?;
+                    }
+                    conn.execute(
+                        "INSERT OR IGNORE INTO Parametre (Cle, Valeur) VALUES ('NomEntreprise','Pointage')",
+                        [],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+
+                let max_personnel = personnel.iter().map(|p| p.0).max().unwrap_or(0);
+                let max_pointage = pointages.iter().map(|p| p.0).max().unwrap_or(0);
+                let max_ferie = feries.iter().map(|f| f.0).max().unwrap_or(0);
+
+                for (table, maxid) in [
+                    ("Personnel", max_personnel),
+                    ("EnregistrementPointage", max_pointage),
+                    ("JourFerie", max_ferie),
+                ] {
+                    let exists: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM sqlite_sequence WHERE name = ?1",
+                            params![table],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0);
+                    if exists > 0 {
+                        let _ = conn.execute(
+                            "UPDATE sqlite_sequence SET seq = ?1 WHERE name = ?2",
+                            params![maxid, table],
+                        );
+                    } else {
+                        let _ = conn.execute(
+                            "INSERT INTO sqlite_sequence (name, seq) VALUES (?1, ?2)",
+                            params![table, maxid],
+                        );
+                    }
+                }
+
+                Ok(())
+            })();
+
+            match resultat {
+                Ok(_) => {
+                    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+                    Ok(())
+                }
+                Err(e) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    Err(e)
+                }
+            }
+        })
     }
 }
