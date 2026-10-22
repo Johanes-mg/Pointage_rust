@@ -11,6 +11,8 @@ const COL_GAP: f32 = 16.0;
 const HAUTEUR_LIGNE: f32 = 32.0;
 const MARGE_LATERALE: f32 = 12.0;
 const HAUTEUR_LIGNE_PERSONNEL: f32 = 24.0;
+const TAILLE_CASE_JOUR: f32 = 58.0;
+const HAUTEUR_CASE_JOUR: f32 = 52.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct ClassementEntry {
@@ -56,6 +58,7 @@ pub struct BilanState {
     pub cache_jours_pointes: Vec<u32>,
     pub cache_feries: HashMap<u32, Vec<String>>,
     pub cache_classement: Option<Vec<ClassementEntry>>,
+    pub recherche: String,
 }
 
 impl BilanState {
@@ -72,6 +75,7 @@ impl BilanState {
             cache_jours_pointes: Vec::new(),
             cache_feries: HashMap::new(),
             cache_classement: None,
+            recherche: String::new(),
         }
     }
 
@@ -113,7 +117,7 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut BilanState) {
     let hauteur_dispo = ui.available_height().max(400.0);
     let dispo = ui.available_width();
     let ecart = 16.0_f32;
-    let seuil = 600.0_f32;
+    let seuil = 860.0_f32;
 
     if dispo < seuil {
         theme::carte(ui, |ui| {
@@ -171,10 +175,62 @@ fn colonne_gauche(
             .strong(),
     );
     ui.add_space(8.0);
+
+    let largeur_recherche = ui.available_width();
+    let recherche_changee = theme::champ_recherche(ui, &mut state.recherche, largeur_recherche);
+
+    ui.add_space(8.0);
     theme::separateur(ui);
     ui.add_space(4.0);
 
-    let hauteur_liste = (hauteur - 60.0).max(120.0);
+    let filtre = state.recherche.to_lowercase();
+    let liste: Vec<&Personnel> = personnel
+        .iter()
+        .filter(|p| {
+            if filtre.trim().is_empty() {
+                true
+            } else {
+                let haystack = format!(
+                    "{} {} {}",
+                    p.nom,
+                    p.prenom,
+                    p.matricule.clone().unwrap_or_default()
+                )
+                .to_lowercase();
+                haystack.contains(&filtre)
+            }
+        })
+        .collect();
+
+    if recherche_changee {
+        if let Some(id) = state.personnel_selectionne {
+            let present = liste.iter().any(|p| p.id == id);
+            if !present {
+                state.personnel_selectionne = None;
+                state.date_detaillee = None;
+                state.cache_personnel_id = None;
+            }
+        }
+    }
+
+    if liste.is_empty() {
+        ui.vertical_centered(|ui| {
+            ui.add_space(30.0);
+            ui.label(
+                egui::RichText::new(if personnel.is_empty() {
+                    "Aucun personnel enregistré"
+                } else {
+                    "Aucun résultat"
+                })
+                .size(13.0)
+                .color(theme::TEXTE_SECONDAIRE),
+            );
+            ui.add_space(30.0);
+        });
+        return;
+    }
+
+    let hauteur_liste = (hauteur - 110.0).max(120.0);
 
     egui::ScrollArea::vertical()
         .id_source("bilan_personnel_scroll")
@@ -183,10 +239,10 @@ fn colonne_gauche(
         .show_rows(
             ui,
             HAUTEUR_LIGNE_PERSONNEL,
-            personnel.len(),
+            liste.len(),
             |ui, range| {
                 for i in range {
-                    let p = &personnel[i];
+                    let p = liste[i];
                     let sel = state.personnel_selectionne == Some(p.id);
                     let txt = if sel {
                         egui::RichText::new(p.nom_complet())
@@ -713,7 +769,7 @@ fn afficher_bilan_perso(
 
     ui.label(
         egui::RichText::new(format!(
-            "Jours pointes ce mois : {} / {}",
+            "Jours pointés ce mois : {} / {}",
             state.cache_jours_pointes.len(),
             nb
         ))
@@ -762,8 +818,8 @@ fn afficher_bilan_perso(
                 }
             };
 
-            let (rect, resp) =
-                ui.allocate_exact_size(egui::vec2(58.0, 52.0), egui::Sense::click());
+            let (rect, resp) = ui
+                .allocate_exact_size(egui::vec2(TAILLE_CASE_JOUR, HAUTEUR_CASE_JOUR), egui::Sense::click());
             if ui.is_rect_visible(rect) {
                 ui.painter().rect_filled(rect, theme::r_sm(), fond);
                 ui.painter().text(
@@ -891,7 +947,7 @@ fn afficher_bilan_perso(
                     .unwrap_or_else(|| "- /20".into());
 
                 ui.label(format!("Matin : {}", note_m_txt));
-                ui.label(format!("Apres-midi : {}", note_a_txt));
+                ui.label(format!("Après-midi : {}", note_a_txt));
                 ui.label(format!("Total du jour : {}", total_txt));
 
                 if let Some(o) = &pt.observation {
@@ -905,7 +961,7 @@ fn afficher_bilan_perso(
 }
 
 fn barre_mois(ui: &mut egui::Ui, state: &mut BilanState) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if theme::bouton_image_seule(ui, "annee_gauche.png", 40.0, 22.0) {
             state.mois_affiche = NaiveDate::from_ymd_opt(
                 state.mois_affiche.year() - 1,
@@ -939,8 +995,8 @@ fn barre_mois(ui: &mut egui::Ui, state: &mut BilanState) {
         ui.add_space(10.0);
 
         let mois_fr = [
-            "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin", "Juillet", "Aout",
-            "Septembre", "Octobre", "Novembre", "Decembre",
+            "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août",
+            "Septembre", "Octobre", "Novembre", "Décembre",
         ];
         ui.label(
             egui::RichText::new(format!(

@@ -45,15 +45,20 @@ pub fn afficher(ctx: &egui::Context, db: &Database, state: &mut LoginState) -> L
         .frame(egui::Frame::none().fill(theme::FOND_CARTE))
         .show(ctx, |ui| {
             let taille = ui.available_size();
-            let largeur_gauche = (taille.x * 0.20).max(220.0);
-            let largeur_droite = taille.x - largeur_gauche;
+            let compact = taille.x < 820.0;
 
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
+            if compact {
+                panneau_droit(ui, db, state, &mut action, taille.x, taille.y);
+            } else {
+                let largeur_gauche = (taille.x * 0.20).max(220.0);
+                let largeur_droite = taille.x - largeur_gauche;
 
-                panneau_gauche(ui, largeur_gauche, taille.y);
-                panneau_droit(ui, db, state, &mut action, largeur_droite, taille.y);
-            });
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    panneau_gauche(ui, largeur_gauche, taille.y);
+                    panneau_droit(ui, db, state, &mut action, largeur_droite, taille.y);
+                });
+            }
         });
 
     state.premier_affichage = false;
@@ -148,7 +153,7 @@ fn panneau_droit(
     largeur: f32,
     hauteur: f32,
 ) {
-    let largeur_formulaire = 380.0;
+    let largeur_formulaire = (largeur - 40.0).clamp(300.0, 380.0);
 
     egui::Frame::none().show(ui, |ui| {
         ui.allocate_ui_with_layout(
@@ -352,10 +357,10 @@ fn champ_formulaire(
 
             if password {
                 let afficher_ref = afficher.as_mut().unwrap();
-                let largeur_saisie = largeur - 42.0;
+                let largeur_saisie = largeur - 46.0;
 
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().item_spacing.x = 8.0;
 
                     let reponse = ui.add(
                         egui::TextEdit::singleline(valeur)

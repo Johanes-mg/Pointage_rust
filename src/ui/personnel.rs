@@ -4,15 +4,10 @@ use crate::theme;
 
 const HAUTEUR_LIGNE: f32 = 34.0;
 const PAD_CELL: f32 = 10.0;
-const COL_GAP: f32 = 16.0;
+const COL_GAP: f32 = 12.0;
 const MARGE: f32 = 12.0;
 
-const COL_MATRICULE: f32 = 100.0;
-const COL_NOM: f32 = 120.0;
-const COL_PRENOM: f32 = 120.0;
-const COL_TELEPHONE: f32 = 130.0;
-const COL_EMAIL: f32 = 200.0;
-const COL_GRADE: f32 = 130.0;
+const POIDS: [f32; 6] = [1.0, 1.4, 1.4, 1.2, 2.0, 1.2];
 
 pub struct PersonnelState {
     pub nom: String,
@@ -30,6 +25,7 @@ pub struct PersonnelState {
     pub cache: Option<Vec<Personnel>>,
     pub premier_affichage: bool,
     pub mutation_effectuee: bool,
+    pub recherche: String,
 }
 
 impl PersonnelState {
@@ -50,6 +46,7 @@ impl PersonnelState {
             cache: None,
             premier_affichage: true,
             mutation_effectuee: false,
+            recherche: String::new(),
         }
     }
 
@@ -88,34 +85,46 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState) {
     ui.add_space(8.0);
 
     let largeur_totale = ui.available_width();
-    let largeur_gauche = (largeur_totale * 0.36).max(390.0);
-    let largeur_droite = (largeur_totale - largeur_gauche - 16.0).max(320.0);
+    let hauteur_totale = ui.available_height().max(400.0);
+    let seuil = 940.0_f32;
 
-    ui.horizontal_top(|ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(largeur_gauche, ui.available_height()),
-            egui::Layout::top_down(egui::Align::LEFT),
-            |ui| {
-                formulaire_gauche(ui, db, state);
-            },
-        );
-
+    if largeur_totale < seuil {
+        formulaire_gauche(ui, db, state);
         ui.add_space(16.0);
+        table_droite(ui, db, state, largeur_totale, hauteur_totale);
+    } else {
+        let largeur_gauche = (largeur_totale * 0.36).clamp(390.0, 480.0);
+        let largeur_droite = largeur_totale - largeur_gauche - 16.0;
 
-        ui.allocate_ui_with_layout(
-            egui::vec2(largeur_droite, ui.available_height()),
-            egui::Layout::top_down(egui::Align::LEFT),
-            |ui| {
-                table_droite(ui, db, state, largeur_droite);
-            },
-        );
-    });
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(largeur_gauche, hauteur_totale),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.set_max_width(largeur_gauche);
+                    formulaire_gauche(ui, db, state);
+                },
+            );
+
+            ui.add_space(16.0);
+
+            ui.allocate_ui_with_layout(
+                egui::vec2(largeur_droite, hauteur_totale),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.set_max_width(largeur_droite);
+                    table_droite(ui, db, state, largeur_droite, hauteur_totale);
+                },
+            );
+        });
+    }
 
     state.premier_affichage = false;
 }
 
 fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState) {
-    ui.add_space(10.0);
+    ui.set_max_width(ui.available_width());
+    ui.add_space(4.0);
     theme::separateur(ui);
     ui.add_space(10.0);
 
@@ -123,7 +132,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
     let premier = state.premier_affichage;
 
     ui.horizontal(|ui| {
-        let largeur = (ui.available_width() - 12.0) / 2.0;
+        let largeur = ((ui.available_width() - 12.0) / 2.0).max(80.0);
 
         if champ_mi_largeur(ui, "Nom *", &mut state.nom, largeur, "nom_field", premier) {
             ui.memory_mut(|m| m.request_focus(egui::Id::new("prenom_field")));
@@ -136,7 +145,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
     ui.add_space(10.0);
 
     ui.horizontal(|ui| {
-        let largeur = (ui.available_width() - 12.0) / 2.0;
+        let largeur = ((ui.available_width() - 12.0) / 2.0).max(80.0);
 
         if champ_mi_largeur(
             ui,
@@ -156,7 +165,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
     ui.add_space(10.0);
 
     ui.horizontal(|ui| {
-        let largeur = (ui.available_width() - 12.0) / 2.0;
+        let largeur = ((ui.available_width() - 12.0) / 2.0).max(80.0);
 
         if champ_mi_largeur(
             ui,
@@ -176,7 +185,7 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
     ui.add_space(10.0);
 
     ui.horizontal(|ui| {
-        let largeur = (ui.available_width() - 12.0) / 2.0;
+        let largeur = ((ui.available_width() - 12.0) / 2.0).max(80.0);
 
         if champ_mi_largeur(ui, "Statut", &mut state.statut, largeur, "statut_field", false) {
             ui.memory_mut(|m| m.request_focus(egui::Id::new("grade_field")));
@@ -220,8 +229,8 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
         }
     }
 
-    ui.horizontal(|ui| {
-        let largeur_bouton = (ui.available_width() - 16.0) / 3.0;
+    ui.horizontal_wrapped(|ui| {
+        let largeur_bouton = ((ui.available_width() - 16.0) / 3.0).max(60.0);
 
         if theme::bouton_image_texte(ui, "ajouter.png", "Ajouter", largeur_bouton, 42.0) {
             enregistrer(db, state, false);
@@ -263,19 +272,16 @@ struct Colonnes {
 }
 
 impl Colonnes {
-    fn calculer() -> Self {
+    fn calculer(largeur_dispo: f32) -> Self {
         let mut x = [0.0_f32; 6];
-        let l = [
-            COL_MATRICULE,
-            COL_NOM,
-            COL_PRENOM,
-            COL_TELEPHONE,
-            COL_EMAIL,
-            COL_GRADE,
-        ];
+        let mut l = [0.0_f32; 6];
+
+        let utile = (largeur_dispo - MARGE * 2.0 - COL_GAP * 5.0).max(240.0);
+        let somme: f32 = POIDS.iter().sum();
 
         let mut curseur = MARGE;
         for i in 0..6 {
+            l[i] = (utile * POIDS[i] / somme).max(48.0);
             x[i] = curseur;
             curseur += l[i] + COL_GAP;
         }
@@ -288,11 +294,43 @@ impl Colonnes {
     }
 }
 
-fn table_droite(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState, largeur: f32) {
+fn table_droite(
+    ui: &mut egui::Ui,
+    db: &Database,
+    state: &mut PersonnelState,
+    largeur: f32,
+    hauteur: f32,
+) {
     if state.cache.is_none() {
         state.cache = Some(db.get_personnel().unwrap_or_default());
     }
-    let liste = state.cache.clone().unwrap_or_default();
+    let source = state.cache.clone().unwrap_or_default();
+
+    let filtre = state.recherche.to_lowercase();
+    let liste: Vec<Personnel> = if filtre.trim().is_empty() {
+        source.clone()
+    } else {
+        source
+            .iter()
+            .filter(|p| {
+                let haystack = format!(
+                    "{} {} {} {} {} {} {} {} {}",
+                    p.nom,
+                    p.prenom,
+                    p.matricule.clone().unwrap_or_default(),
+                    p.telephone.clone().unwrap_or_default(),
+                    p.adresse.clone().unwrap_or_default(),
+                    p.email.clone().unwrap_or_default(),
+                    p.statut.clone().unwrap_or_default(),
+                    p.grade.clone().unwrap_or_default(),
+                    p.situation_familiale.clone().unwrap_or_default()
+                )
+                .to_lowercase();
+                haystack.contains(&filtre)
+            })
+            .cloned()
+            .collect()
+    };
 
     ui.horizontal(|ui| {
         ui.label(
@@ -311,7 +349,22 @@ fn table_droite(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState, la
         });
     });
 
-    ui.add_space(10.0);
+    ui.add_space(8.0);
+
+    let largeur_recherche = ui.available_width();
+    let recherche_changee = theme::champ_recherche(ui, &mut state.recherche, largeur_recherche);
+
+    if recherche_changee {
+        if let Some(id) = state.selection_id {
+            let present = liste.iter().any(|p| p.id == id);
+            if !present {
+                state.vider();
+                state.message.clear();
+            }
+        }
+    }
+
+    ui.add_space(8.0);
     theme::separateur(ui);
     ui.add_space(6.0);
 
@@ -319,24 +372,35 @@ fn table_droite(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelState, la
         ui.vertical_centered(|ui| {
             ui.add_space(40.0);
             ui.label(
-                egui::RichText::new("Aucun membre enregistré")
-                    .size(13.0)
-                    .color(theme::TEXTE_SECONDAIRE),
+                egui::RichText::new(if source.is_empty() {
+                    "Aucun membre enregistré"
+                } else {
+                    "Aucun résultat"
+                })
+                .size(13.0)
+                .color(theme::TEXTE_SECONDAIRE),
             );
             ui.add_space(40.0);
         });
         return;
     }
 
-    let cols = Colonnes::calculer();
-    let largeur_contenu = cols.largeur_totale().max(largeur);
+    let largeur_dispo = ui.available_width().min(largeur).max(200.0);
+    let cols = Colonnes::calculer(largeur_dispo);
+    let largeur_contenu = cols.largeur_totale().min(largeur_dispo);
+
+    let hauteur_liste = (hauteur - 140.0).max(200.0);
 
     let mut action: Option<ActionTable> = None;
 
-    egui::ScrollArea::both()
+    egui::ScrollArea::vertical()
         .id_source("personnel_table_scroll")
         .auto_shrink([false, false])
+        .max_height(hauteur_liste)
         .show(ui, |ui| {
+            ui.set_max_width(largeur_dispo);
+            ui.set_width(largeur_dispo);
+
             let (rect_entete, _) = ui.allocate_exact_size(
                 egui::vec2(largeur_contenu, HAUTEUR_LIGNE),
                 egui::Sense::hover(),
@@ -532,11 +596,7 @@ fn bouton_desactive(ui: &mut egui::Ui, fichier: &str, texte: &str, largeur: f32,
 
     let painter = ui.painter();
     painter.rect_filled(rect, theme::r_md(), theme::FOND);
-    painter.rect_stroke(
-        rect,
-        theme::r_md(),
-        egui::Stroke::new(1.0_f32, theme::BORDURE),
-    );
+    painter.rect_stroke(rect, theme::r_md(), egui::Stroke::new(1.0_f32, theme::BORDURE));
 
     let mut x = rect.left() + 14.0;
     if let Some(tex) = theme::image(&ctx, fichier) {

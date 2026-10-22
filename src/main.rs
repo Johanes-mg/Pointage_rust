@@ -77,15 +77,14 @@ fn main() -> Result<(), eframe::Error> {
     };
 
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([1280.0, 800.0])
-        .with_min_inner_size([900.0, 600.0]);
+        .with_inner_size([1200.0, 780.0])
+        .with_min_inner_size([880.0, 560.0])
+        .with_maximized(false)
+        .with_resizable(true);
 
     match theme::charger_icone_fenetre("logo.ico") {
         Some(icone) => {
-            let w = icone.width;
-            let h = icone.height;
             viewport = viewport.with_icon(Arc::new(icone));
-            eprintln!("Icone de fenetre chargee : {}x{}", w, h);
         }
         None => {
             eprintln!("Attention : impossible de charger Images/logo.ico, icone par defaut utilisee.");
@@ -96,12 +95,37 @@ fn main() -> Result<(), eframe::Error> {
 
     let options = eframe::NativeOptions {
         viewport,
+        follow_system_theme: false,
+        default_theme: eframe::Theme::Light,
         ..Default::default()
     };
 
     eframe::run_native(
         "Pointage",
         options,
-        Box::new(|_cc| Ok(Box::new(app))),
+        Box::new(|cc| {
+            theme::configurer_style(&cc.egui_ctx);
+            ajuster_taille_fenetre(cc);
+            Ok(Box::new(app))
+        }),
     )
 }
+
+fn ajuster_taille_fenetre(cc: &eframe::CreationContext<'_>) {
+    let ecran = cc
+        .egui_ctx
+        .input(|i| i.viewport().monitor_size)
+        .map(|taille| {
+            let ppp = cc.egui_ctx.pixels_per_point();
+            if ppp > 0.0 {
+                taille / ppp
+            } else {
+                taille
+            }
+        })
+        .unwrap_or_else(|| egui::vec2(1280.0, 800.0));
+
+    let cible = theme::taille_fenetre_recommandee(&cc.egui_ctx, ecran);
+    cc.egui_ctx
+        .send_viewport_cmd(egui::ViewportCommand::InnerSize(cible));
+} 

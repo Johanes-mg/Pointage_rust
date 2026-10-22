@@ -4,6 +4,9 @@ use crate::theme;
 use chrono::{Datelike, Local, NaiveDate, NaiveTime, Timelike};
 use std::collections::HashMap;
 
+const CASE_LARGEUR: f32 = 46.0;
+const CASE_HAUTEUR: f32 = 46.0;
+
 #[derive(Clone, Debug, Default)]
 pub struct PointageEnCours {
     pub coche_matin: bool,
@@ -28,6 +31,7 @@ pub struct PointageState {
     pub cache_ferie_date: Option<NaiveDate>,
     pub brouillons: HashMap<i64, PointageEnCours>,
     pub rafraichir: bool,
+    pub recherche: String,
 }
 
 impl PointageState {
@@ -46,6 +50,7 @@ impl PointageState {
             cache_ferie_date: None,
             brouillons: HashMap::new(),
             rafraichir: true,
+            recherche: String::new(),
         }
     }
 
@@ -73,31 +78,26 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
     ui.add_space(16.0);
 
     let dispo = ui.available_width();
+    let hauteur_totale = ui.available_height().max(500.0);
     let ecart = 16.0_f32;
-    let largeur_gauche_min = 340.0_f32;
-    let largeur_droite_min = 320.0_f32;
-    let seuil_deux_colonnes = largeur_gauche_min + ecart + largeur_droite_min;
+    let seuil = 980.0_f32;
 
-    if dispo < seuil_deux_colonnes {
+    if dispo < seuil {
         calendrier_gauche(ui, db, state);
-        ui.add_space(16.0);
-        employes_droite(ui, db, state);
+        ui.add_space(ecart);
+        employes_droite(ui, db, state, dispo, hauteur_totale);
         return;
     }
 
-    let mut largeur_gauche = (dispo * 0.42).max(largeur_gauche_min);
-    let mut largeur_droite = dispo - largeur_gauche - ecart;
-
-    if largeur_droite < largeur_droite_min {
-        largeur_droite = largeur_droite_min;
-        largeur_gauche = (dispo - ecart - largeur_droite).max(largeur_gauche_min);
-    }
+    let largeur_gauche = (dispo * 0.42).clamp(400.0, dispo - 420.0);
+    let largeur_droite = dispo - largeur_gauche - ecart;
 
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(
-            egui::vec2(largeur_gauche, ui.available_height()),
+            egui::vec2(largeur_gauche, hauteur_totale),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
+                ui.set_max_width(largeur_gauche);
                 calendrier_gauche(ui, db, state);
             },
         );
@@ -105,10 +105,11 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
         ui.add_space(ecart);
 
         ui.allocate_ui_with_layout(
-            egui::vec2(largeur_droite, ui.available_height()),
+            egui::vec2(largeur_droite, hauteur_totale),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
-                employes_droite(ui, db, state);
+                ui.set_max_width(largeur_droite);
+                employes_droite(ui, db, state, largeur_droite, hauteur_totale);
             },
         );
     });
@@ -265,8 +266,9 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
 
     theme::carte(ui, |ui| {
         ui.set_width(ui.available_width());
+        ui.set_max_width(ui.available_width());
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if theme::bouton_image_seule(ui, "annee_gauche.png", 40.0, 22.0) {
                 state.mois_affiche = NaiveDate::from_ymd_opt(
                     state.mois_affiche.year() - 1,
@@ -302,8 +304,8 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
             ui.add_space(10.0);
 
             let mois_fr = [
-                "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin", "Juillet", "Aout",
-                "Septembre", "Octobre", "Novembre", "Decembre",
+                "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août",
+                "Septembre", "Octobre", "Novembre", "Décembre",
             ];
             ui.label(
                 egui::RichText::new(format!(
@@ -335,10 +337,9 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
 
         let jours_sem = ["L", "M", "M", "J", "V", "S", "D"];
         ui.horizontal(|ui| {
-            let largeur_case = 46.0;
             for j in jours_sem.iter() {
                 ui.add_sized(
-                    [largeur_case, 20.0],
+                    [CASE_LARGEUR, 20.0],
                     egui::Label::new(
                         egui::RichText::new(*j)
                             .size(12.0)
@@ -359,7 +360,6 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
         .unwrap();
         let jour_semaine_premier = premier.weekday().num_days_from_monday();
 
-        let largeur_case = 46.0;
         let nb_colonnes = 7;
 
         let stats = state.stats_mois.clone();
@@ -375,11 +375,11 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
             ui.horizontal(|ui| {
                 for col in 0..nb_colonnes {
                     if ligne == 0 && col < jour_semaine_premier as usize {
-                        ui.add_sized([largeur_case, 46.0], egui::Label::new(""));
+                        ui.add_sized([CASE_LARGEUR, CASE_HAUTEUR], egui::Label::new(""));
                         continue;
                     }
                     if jour_courant > nb_jours {
-                        ui.add_sized([largeur_case, 46.0], egui::Label::new(""));
+                        ui.add_sized([CASE_LARGEUR, CASE_HAUTEUR], egui::Label::new(""));
                         continue;
                     }
 
@@ -423,17 +423,13 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                         (theme::FOND, theme::PRIMAIRE, theme::BORDURE)
                     };
 
-                    let (rect, resp) =
-                        ui.allocate_exact_size(egui::vec2(largeur_case, 46.0), egui::Sense::click());
+                    let (rect, resp) = ui
+                        .allocate_exact_size(egui::vec2(CASE_LARGEUR, CASE_HAUTEUR), egui::Sense::click());
 
                     if ui.is_rect_visible(rect) {
                         let painter = ui.painter();
                         painter.rect_filled(rect, theme::r_sm(), fond);
-                        painter.rect_stroke(
-                            rect,
-                            theme::r_sm(),
-                            egui::Stroke::new(1.0_f32, bordure),
-                        );
+                        painter.rect_stroke(rect, theme::r_sm(), egui::Stroke::new(1.0_f32, bordure));
                         painter.text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
@@ -480,8 +476,9 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
             .inner_margin(egui::Margin::symmetric(14.0, 12.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                ui.set_max_width(ui.available_width());
 
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         egui::RichText::new("Jour férié :")
                             .size(12.0)
@@ -531,15 +528,43 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
     });
 }
 
-fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
+fn employes_droite(
+    ui: &mut egui::Ui,
+    db: &Database,
+    state: &mut PointageState,
+    largeur_panneau: f32,
+    hauteur_panneau: f32,
+) {
     if state.cache_personnel.is_none() {
         state.cache_personnel = Some(db.get_personnel().unwrap_or_default());
     }
 
     charger_pointages_jour(db, state);
 
-    let personnes = state.cache_personnel.clone().unwrap_or_default();
-    let total = personnes.len();
+    let toutes = state.cache_personnel.clone().unwrap_or_default();
+    let filtre = state.recherche.to_lowercase();
+    let personnes: Vec<Personnel> = if filtre.trim().is_empty() {
+        toutes.clone()
+    } else {
+        toutes
+            .iter()
+            .filter(|p| {
+                let haystack = format!(
+                    "{} {} {} {} {}",
+                    p.nom,
+                    p.prenom,
+                    p.matricule.clone().unwrap_or_default(),
+                    p.telephone.clone().unwrap_or_default(),
+                    p.email.clone().unwrap_or_default()
+                )
+                .to_lowercase();
+                haystack.contains(&filtre)
+            })
+            .cloned()
+            .collect()
+    };
+
+    let total = toutes.len();
     let presents = state.pointages_jour.len();
     let absents = total.saturating_sub(presents);
     let taux = if total > 0 {
@@ -557,6 +582,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
         .inner_margin(egui::Margin::symmetric(20.0, 14.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            ui.set_max_width(ui.available_width());
 
             let date_str = state.date_selectionnee.format("%d/%m/%Y").to_string();
             ui.label(
@@ -576,7 +602,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                 );
                 ui.add_space(15.0);
                 ui.label(
-                    egui::RichText::new(format!("Presents : {}", presents))
+                    egui::RichText::new(format!("Présents : {}", presents))
                         .size(12.5)
                         .color(theme::SUCCES)
                         .strong(),
@@ -623,6 +649,11 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
 
     ui.add_space(12.0);
 
+    let largeur_recherche = ui.available_width();
+    let _recherche_changee = theme::champ_recherche(ui, &mut state.recherche, largeur_recherche);
+
+    ui.add_space(12.0);
+
     if total == 0 {
         theme::carte(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -649,19 +680,38 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
         return;
     }
 
+    if personnes.is_empty() {
+        theme::carte(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.vertical_centered(|ui| {
+                ui.add_space(30.0);
+                ui.label(
+                    egui::RichText::new("Aucun résultat")
+                        .size(13.0)
+                        .color(theme::TEXTE_SECONDAIRE),
+                );
+                ui.add_space(30.0);
+            });
+        });
+        return;
+    }
+
     let mut action_supprimer: Option<i64> = None;
     let mut action_enregistrer: Option<i64> = None;
+
+    let hauteur_liste = (hauteur_panneau - 200.0).max(240.0);
 
     egui::ScrollArea::both()
         .id_source("pointage_employes_scroll")
         .auto_shrink([false, false])
+        .max_width(largeur_panneau)
+        .max_height(hauteur_liste)
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.set_width(ui.available_width());
+            ui.set_max_width(largeur_panneau);
+            ui.set_width(largeur_panneau);
 
             for p in &personnes {
                 let est_pointe = state.pointages_jour.contains(&p.id);
-
                 let fond_carte = if est_pointe {
                     theme::FOND_POINTAGE
                 } else {
@@ -674,6 +724,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
                     .inner_margin(egui::Margin::same(16.0))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
+                        ui.set_max_width(ui.available_width());
 
                         ui.label(
                             egui::RichText::new(p.nom_complet())
@@ -747,7 +798,7 @@ fn employes_droite(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) 
 
                             ui.add_space(10.0);
 
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(
                                     egui::RichText::new("Observation")
                                         .size(12.0)
@@ -872,11 +923,7 @@ fn bouton_image_seule_desactive(
 
     let painter = ui.painter();
     painter.rect_filled(rect, theme::r_md(), theme::FOND);
-    painter.rect_stroke(
-        rect,
-        theme::r_md(),
-        egui::Stroke::new(1.0_f32, theme::BORDURE),
-    );
+    painter.rect_stroke(rect, theme::r_md(), egui::Stroke::new(1.0_f32, theme::BORDURE));
 
     if let Some(tex) = theme::image(&ctx, fichier_image) {
         let img_rect =
@@ -916,6 +963,7 @@ fn bloc_plage(
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                ui.set_max_width(ui.available_width());
 
                 if bloque {
                     if *coche {

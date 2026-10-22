@@ -5,12 +5,13 @@ use chrono::{Datelike, Local, NaiveDate};
 use std::time::{Duration, Instant};
 
 const DUREE_MESSAGE: Duration = Duration::from_secs(8);
+const CASE_LARGEUR: f32 = 46.0;
+const CASE_HAUTEUR: f32 = 46.0;
 
 pub struct AccueilState {
     pub message: String,
     pub message_ok: bool,
     pub message_expire: Option<Instant>,
-
     pub mois_affiche: NaiveDate,
     pub date_debut: Option<NaiveDate>,
     pub date_fin: Option<NaiveDate>,
@@ -56,23 +57,21 @@ impl AccueilState {
 pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
     state.purger_message_si_expire();
 
-    let hauteur_pleine = ui.available_height().max(500.0);
     let dispo = ui.available_width();
     let ecart = 16.0_f32;
-    let seuil = 660.0_f32;
+    let seuil = 720.0_f32;
 
     if dispo < seuil {
         calendrier_gauche(ui, state);
         ui.add_space(ecart);
         panneau_droit(ui, db, state);
     } else {
-        let largeur_droite = (dispo * 0.58).max(360.0);
-        let largeur_gauche = (dispo - largeur_droite - ecart).max(320.0);
+        let largeur_gauche = (dispo * 0.42).clamp(340.0, dispo - 380.0);
         let largeur_droite = dispo - largeur_gauche - ecart;
 
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
-                egui::vec2(largeur_gauche, hauteur_pleine),
+                egui::vec2(largeur_gauche, 0.0),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
                     calendrier_gauche(ui, state);
@@ -82,7 +81,7 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
             ui.add_space(ecart);
 
             ui.allocate_ui_with_layout(
-                egui::vec2(largeur_droite, hauteur_pleine),
+                egui::vec2(largeur_droite, 0.0),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
                     panneau_droit(ui, db, state);
@@ -91,15 +90,14 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
         });
     }
 
-    ui.ctx()
-        .request_repaint_after(Duration::from_millis(500));
+    ui.ctx().request_repaint_after(Duration::from_millis(500));
 }
 
 fn calendrier_gauche(ui: &mut egui::Ui, state: &mut AccueilState) {
     theme::carte(ui, |ui| {
         ui.set_width(ui.available_width());
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if theme::bouton_image_seule(ui, "annee_gauche.png", 40.0, 22.0) {
                 state.mois_affiche = NaiveDate::from_ymd_opt(
                     state.mois_affiche.year() - 1,
@@ -131,8 +129,8 @@ fn calendrier_gauche(ui: &mut egui::Ui, state: &mut AccueilState) {
             ui.add_space(10.0);
 
             let mois_fr = [
-                "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin", "Juillet", "Aout",
-                "Septembre", "Octobre", "Novembre", "Decembre",
+                "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août",
+                "Septembre", "Octobre", "Novembre", "Décembre",
             ];
             ui.label(
                 egui::RichText::new(format!(
@@ -159,10 +157,9 @@ fn calendrier_gauche(ui: &mut egui::Ui, state: &mut AccueilState) {
 
         let jours_sem = ["L", "M", "M", "J", "V", "S", "D"];
         ui.horizontal(|ui| {
-            let largeur_case = 46.0;
             for j in jours_sem.iter() {
                 ui.add_sized(
-                    [largeur_case, 20.0],
+                    [CASE_LARGEUR, 20.0],
                     egui::Label::new(
                         egui::RichText::new(*j)
                             .size(12.0)
@@ -184,7 +181,6 @@ fn calendrier_gauche(ui: &mut egui::Ui, state: &mut AccueilState) {
         .unwrap();
         let jour_semaine_premier = premier.weekday().num_days_from_monday();
 
-        let largeur_case = 46.0;
         let nb_colonnes = 7;
         let aujourdhui = Local::now().date_naive();
 
@@ -196,12 +192,12 @@ fn calendrier_gauche(ui: &mut egui::Ui, state: &mut AccueilState) {
             ui.horizontal(|ui| {
                 for col in 0..nb_colonnes {
                     if ligne == 0 && col < jour_semaine_premier as usize {
-                        ui.add_sized([largeur_case, 46.0], egui::Label::new(""));
+                        ui.add_sized([CASE_LARGEUR, CASE_HAUTEUR], egui::Label::new(""));
                         continue;
                     }
 
                     if jour_courant > nb_jours {
-                        ui.add_sized([largeur_case, 46.0], egui::Label::new(""));
+                        ui.add_sized([CASE_LARGEUR, CASE_HAUTEUR], egui::Label::new(""));
                         continue;
                     }
 
@@ -235,17 +231,13 @@ fn calendrier_gauche(ui: &mut egui::Ui, state: &mut AccueilState) {
                         (theme::FOND, theme::PRIMAIRE, theme::BORDURE)
                     };
 
-                    let (rect, resp) =
-                        ui.allocate_exact_size(egui::vec2(largeur_case, 46.0), egui::Sense::click());
+                    let (rect, resp) = ui
+                        .allocate_exact_size(egui::vec2(CASE_LARGEUR, CASE_HAUTEUR), egui::Sense::click());
 
                     if ui.is_rect_visible(rect) {
                         let painter = ui.painter();
                         painter.rect_filled(rect, theme::r_sm(), fond);
-                        painter.rect_stroke(
-                            rect,
-                            theme::r_sm(),
-                            egui::Stroke::new(1.0_f32, bordure),
-                        );
+                        painter.rect_stroke(rect, theme::r_sm(), egui::Stroke::new(1.0_f32, bordure));
                         painter.text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
@@ -321,8 +313,8 @@ fn section_horloge(ui: &mut egui::Ui) {
         "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche",
     ];
     let mois_fr = [
-        "janvier", "fevrier", "mars", "avril", "mai", "juin", "juillet", "aout",
-        "septembre", "octobre", "novembre", "decembre",
+        "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
+        "septembre", "octobre", "novembre", "décembre",
     ];
     let jour_nom = jours_fr[now.weekday().num_days_from_monday() as usize];
     let mois_nom = mois_fr[now.month0() as usize];
@@ -337,7 +329,6 @@ fn section_horloge(ui: &mut egui::Ui) {
                 .extra_letter_spacing(1.5),
         );
         ui.add_space(8.0);
-
         ui.label(
             egui::RichText::new(now.format("%H:%M:%S").to_string())
                 .size(56.0)
@@ -345,7 +336,6 @@ fn section_horloge(ui: &mut egui::Ui) {
                 .strong(),
         );
         ui.add_space(4.0);
-
         ui.label(
             egui::RichText::new(date_str)
                 .size(15.0)
@@ -356,7 +346,6 @@ fn section_horloge(ui: &mut egui::Ui) {
 
 fn section_export_rapide(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
     sous_titre(ui, "Export rapide");
-
     ui.add_space(12.0);
 
     let largeur = ui.available_width();
@@ -365,7 +354,7 @@ fn section_export_rapide(ui: &mut egui::Ui, db: &Database, state: &mut AccueilSt
         let t = Local::now().date_naive();
         match excel_export::exporter_tout(db, t, t) {
             Ok(chemin) => {
-                state.afficher_message(format!("Export reussi : {}", chemin), true);
+                state.afficher_message(format!("Export réussi : {}", chemin), true);
             }
             Err(e) => {
                 state.afficher_message(format!("Erreur : {}", e), false);
@@ -376,10 +365,9 @@ fn section_export_rapide(ui: &mut egui::Ui, db: &Database, state: &mut AccueilSt
 
 fn section_export_plage(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
     sous_titre(ui, "Export par plage");
-
     ui.add_space(16.0);
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         champ_date(
             ui,
             "DU",
@@ -419,7 +407,7 @@ fn section_export_plage(ui: &mut egui::Ui, db: &Database, state: &mut AccueilSta
     let pret = matches!((state.date_debut, state.date_fin), (Some(_), Some(_)));
     let largeur = ui.available_width();
 
-    let mut clique = false;
+    let clique;
     if pret {
         clique = theme::bouton_image_texte(
             ui,
@@ -429,20 +417,15 @@ fn section_export_plage(ui: &mut egui::Ui, db: &Database, state: &mut AccueilSta
             44.0,
         );
     } else {
-        bouton_desactive(
-            ui,
-            "exporter.png",
-            "Exporter la plage",
-            largeur,
-            44.0,
-        );
+        bouton_desactive(ui, "exporter.png", "Exporter la plage", largeur, 44.0);
+        clique = false;
     }
 
     if clique {
         if let (Some(d), Some(f)) = (state.date_debut, state.date_fin) {
             match excel_export::exporter_tout(db, d, f) {
                 Ok(chemin) => {
-                    state.afficher_message(format!("Export reussi : {}", chemin), true);
+                    state.afficher_message(format!("Export réussi : {}", chemin), true);
                 }
                 Err(e) => {
                     state.afficher_message(format!("Erreur : {}", e), false);
@@ -540,11 +523,7 @@ fn bouton_desactive(
 
     let painter = ui.painter();
     painter.rect_filled(rect, theme::r_md(), theme::FOND);
-    painter.rect_stroke(
-        rect,
-        theme::r_md(),
-        egui::Stroke::new(1.0_f32, theme::BORDURE),
-    );
+    painter.rect_stroke(rect, theme::r_md(), egui::Stroke::new(1.0_f32, theme::BORDURE));
 
     let mut x = rect.left() + 14.0;
     if let Some(tex) = theme::image(&ctx, fichier) {

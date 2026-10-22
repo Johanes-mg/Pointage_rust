@@ -74,6 +74,8 @@ pub fn afficher(
     state: &mut MainWindowState,
 ) -> MainAction {
     let mut action = MainAction::Aucune;
+    let largeur = ctx.available_rect().width();
+    let compact = largeur < 860.0;
 
     egui::TopBottomPanel::top("topbar")
         .exact_height(68.0)
@@ -84,14 +86,16 @@ pub fn afficher(
                 theme::image_ui(ui, "logo.png", 40.0, 40.0);
                 ui.add_space(12.0);
 
-                ui.vertical(|ui| {
-                    ui.add_space(16.0);
-                    ui.label(
-                        egui::RichText::new(&utilisateur.nom_complet)
-                            .size(12.0)
-                            .color(egui::Color32::from_rgb(200, 215, 235)),
-                    );
-                });
+                if !compact {
+                    ui.vertical(|ui| {
+                        ui.add_space(16.0);
+                        ui.label(
+                            egui::RichText::new(&utilisateur.nom_complet)
+                                .size(12.0)
+                                .color(egui::Color32::from_rgb(200, 215, 235)),
+                        );
+                    });
+                }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(16.0);
@@ -102,30 +106,37 @@ pub fn afficher(
 
                     ui.add_space(16.0);
 
-                    let pages = [
-                        (Page::Infos, "infos.png", "Infos"),
-                        (Page::Compte, "compte.png", "Compte"),
-                        (Page::Bilan, "bilan.png", "Bilan"),
-                        (Page::Pointage, "pointage.png", "Pointage"),
-                        (Page::Personnel, "personnel.png", "Personnel"),
-                        (Page::Accueil, "accueil.png", "Accueil"),
-                    ];
+                    egui::ScrollArea::horizontal()
+                        .id_source("nav_scroll")
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let pages = [
+                                    (Page::Infos, "infos.png", "Infos"),
+                                    (Page::Compte, "compte.png", "Compte"),
+                                    (Page::Bilan, "bilan.png", "Bilan"),
+                                    (Page::Pointage, "pointage.png", "Pointage"),
+                                    (Page::Personnel, "personnel.png", "Personnel"),
+                                    (Page::Accueil, "accueil.png", "Accueil"),
+                                ];
 
-                    for (page, img, label) in pages {
-                        let actif = state.page == page;
-                        let fond = if actif { theme::ACCENT } else { theme::PRIMAIRE };
-                        let hover_fond = if actif {
-                            theme::ACCENT
-                        } else {
-                            theme::PRIMAIRE_CLAIR
-                        };
+                                for (page, img, label) in pages {
+                                    let actif = state.page == page;
+                                    let fond = if actif { theme::ACCENT } else { theme::PRIMAIRE };
+                                    let hover_fond = if actif {
+                                        theme::ACCENT
+                                    } else {
+                                        theme::PRIMAIRE_CLAIR
+                                    };
 
-                        if bouton_nav_image(ui, img, label, fond, hover_fond) {
-                            if state.page != page {
-                                state.page = page;
-                            }
-                        }
-                    }
+                                    if bouton_nav_image(ui, img, label, fond, hover_fond) {
+                                        if state.page != page {
+                                            state.page = page;
+                                        }
+                                    }
+                                }
+                            });
+                        });
                 });
             });
         });
@@ -139,6 +150,9 @@ pub fn afficher(
             let marge = egui::Margin::symmetric(30.0, 20.0);
 
             egui::Frame::none().inner_margin(marge).show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
+                ui.set_width(ui.available_width());
+
                 if page == Page::Bilan {
                     bilan::afficher(ui, db, &mut state.bilan);
                 } else {

@@ -38,6 +38,23 @@ pub fn r_lg() -> Rounding {
     Rounding::same(14.0)
 }
 
+pub fn echelle(ctx: &egui::Context) -> f32 {
+    let ppp = ctx.pixels_per_point();
+    if ppp <= 0.0 {
+        1.0
+    } else {
+        ppp.min(2.0)
+    }
+}
+
+pub fn taille_fenetre_recommandee(ctx: &egui::Context, ecran: egui::Vec2) -> egui::Vec2 {
+    let facteur = echelle(ctx);
+    let dispo = ecran / facteur;
+    let largeur = dispo.x.clamp(960.0, 1400.0);
+    let hauteur = dispo.y.clamp(620.0, 900.0);
+    egui::vec2(largeur, hauteur)
+}
+
 pub fn configurer_style(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = FOND;
@@ -83,7 +100,7 @@ pub fn configurer_style(ctx: &egui::Context) {
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(10.0, 10.0);
+    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(14.0, 10.0);
     style.spacing.interact_size = egui::vec2(38.0, 34.0);
     style.spacing.window_margin = egui::Margin::same(18.0);
@@ -247,48 +264,6 @@ pub fn bouton_image_texte(
     resp.clicked()
 }
 
-#[allow(dead_code)]
-pub fn bouton_image_centree(
-    ui: &mut egui::Ui,
-    fichier_image: &str,
-    largeur: f32,
-    hauteur: f32,
-    largeur_image: f32,
-    hauteur_image: f32,
-) -> bool {
-    let ctx = ui.ctx().clone();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(largeur, hauteur), egui::Sense::click());
-
-    let fond = if resp.hovered() {
-        Color32::from_rgb(245, 248, 252)
-    } else {
-        Color32::WHITE
-    };
-    let bordure = if resp.hovered() { ACCENT } else { BORDURE };
-
-    let painter = ui.painter();
-    painter.rect_filled(rect, r_md(), fond);
-    painter.rect_stroke(rect, r_md(), Stroke::new(1.0_f32, bordure));
-
-    if let Some(tex) = image(&ctx, fichier_image) {
-        let img_rect = egui::Rect::from_center_size(
-            rect.center(),
-            egui::vec2(largeur_image, hauteur_image),
-        );
-        painter.image(
-            tex.id(),
-            img_rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            Color32::WHITE,
-        );
-    }
-
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    resp.clicked()
-}
-
 pub fn bouton_image_seule(
     ui: &mut egui::Ui,
     fichier_image: &str,
@@ -360,6 +335,40 @@ pub fn message_inline(ui: &mut egui::Ui, texte: &str, succes: bool) {
         .show(ui, |ui| {
             ui.label(egui::RichText::new(texte).color(couleur).size(12.5));
         });
+}
+
+pub fn champ_recherche(ui: &mut egui::Ui, texte: &mut String, largeur: f32) -> bool {
+    let mut change = false;
+    let largeur_icone = 32.0;
+    ui.allocate_ui_with_layout(
+        egui::vec2(largeur, 34.0),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let reponse = ui.add(
+                egui::TextEdit::singleline(texte)
+                    .hint_text("Rechercher")
+                    .desired_width((largeur - largeur_icone).max(80.0))
+                    .margin(egui::vec2(10.0, 8.0)),
+            );
+            if reponse.changed() {
+                change = true;
+            }
+            if !texte.is_empty() {
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("x").size(13.0))
+                            .fill(Color32::WHITE)
+                            .min_size(egui::vec2(largeur_icone, 30.0)),
+                    )
+                    .clicked()
+                {
+                    texte.clear();
+                    change = true;
+                }
+            }
+        },
+    );
+    change
 }
 
 pub fn charger_icone_fenetre(nom: &str) -> Option<egui::IconData> {
