@@ -664,6 +664,26 @@ fn note_effective(
     }
 }
 
+fn jours_ouvrables_du_mois(
+    annee: i32,
+    mois: u32,
+    feries: &HashMap<u32, Vec<String>>,
+) -> u32 {
+    let nb = jours_dans_mois(annee, mois);
+    let mut total = 0u32;
+    for j in 1..=nb {
+        let d = NaiveDate::from_ymd_opt(annee, mois, j).unwrap();
+        if matches!(d.weekday(), Weekday::Sat | Weekday::Sun) {
+            continue;
+        }
+        if ferie_jour_entier(feries, j) {
+            continue;
+        }
+        total += 1;
+    }
+    total.max(1)
+}
+
 fn calculer_classement(
     db: &Database,
     personnel: &[Personnel],
@@ -675,6 +695,7 @@ fn calculer_classement(
     let debut = NaiveDate::from_ymd_opt(annee, mois, 1).unwrap();
     let fin = NaiveDate::from_ymd_opt(annee, mois, nb).unwrap();
     let pointages = db.get_pointages_periode(debut, fin).unwrap_or_default();
+    let jours_ouvrables = jours_ouvrables_du_mois(annee, mois, feries) as f64;
 
     let mut resultats: Vec<ClassementEntry> = personnel
         .iter()
@@ -683,13 +704,17 @@ fn calculer_classement(
             let mut compte = 0_usize;
             for pt in pointages.iter().filter(|pt| pt.personnel_id == p.id) {
                 let jour = pt.date_pointage.day();
+                let d = pt.date_pointage;
+                if matches!(d.weekday(), Weekday::Sat | Weekday::Sun) {
+                    continue;
+                }
                 if let Some(n) = note_effective(pt, feries, jour) {
                     somme += n;
                     compte += 1;
                 }
             }
-            let note = if compte > 0 {
-                somme / compte as f64
+            let note = if jours_ouvrables > 0.0 {
+                somme / jours_ouvrables
             } else {
                 0.0
             };
@@ -767,11 +792,17 @@ fn afficher_bilan_perso(
     let jours_pointes_set: HashSet<u32> = state.cache_jours_pointes.iter().copied().collect();
     let feries = state.cache_feries.clone();
 
+    let jours_ouvrables = jours_ouvrables_du_mois(
+        state.mois_affiche.year(),
+        state.mois_affiche.month(),
+        &feries,
+    );
+
     ui.label(
         egui::RichText::new(format!(
-            "Jours pointés ce mois : {} / {}",
+            "Jours pointés ce mois : {} / {} ouvrables",
             state.cache_jours_pointes.len(),
-            nb
+            jours_ouvrables
         ))
         .size(12.5)
         .color(theme::TEXTE_SECONDAIRE),

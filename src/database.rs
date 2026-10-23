@@ -1,6 +1,6 @@
 use crate::models::*;
 use crate::securite;
-use chrono::{Datelike, NaiveDate, NaiveTime};
+use chrono::{Datelike, NaiveDate, NaiveTime, Weekday};
 use rusqlite::{params, Connection};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -848,38 +848,72 @@ impl Database {
         iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
+    fn charger_feries_par_date(
+        conn: &Connection,
+        debut: NaiveDate,
+        fin: NaiveDate,
+    ) -> Result<HashMap<NaiveDate, Vec<String>>, String> {
+        let mut map: HashMap<NaiveDate, Vec<String>> = HashMap::new();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DatePointage, Periode
+                 FROM JourFerie
+                 WHERE DatePointage BETWEEN ?1 AND ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(
+                params![
+                    debut.format("%Y-%m-%d").to_string(),
+                    fin.format("%Y-%m-%d").to_string()
+                ],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        for item in iter {
+            let (d, p) = item.map_err(|e| e.to_string())?;
+            if let Ok(date) = NaiveDate::parse_from_str(&d, "%Y-%m-%d") {
+                map.entry(date).or_default().push(p);
+            }
+        }
+        Ok(map)
+    }
+
+    fn ferie_entier(feries: &HashMap<NaiveDate, Vec<String>>, date: NaiveDate) -> bool {
+        feries
+            .get(&date)
+            .map(|v| v.iter().any(|p| p == "jour"))
+            .unwrap_or(false)
+    }
+
+    fn jours_ouvrables_entre(
+        debut: NaiveDate,
+        fin: NaiveDate,
+        feries: &HashMap<NaiveDate, Vec<String>>,
+    ) -> f64 {
+        let mut total = 0u32;
+        let mut d = debut;
+        while d <= fin {
+            let weekend = matches!(d.weekday(), Weekday::Sat | Weekday::Sun);
+            if !weekend && !Self::ferie_entier(feries, d) {
+                total += 1;
+            }
+            d = match d.succ_opt() {
+                Some(n) => n,
+                None => break,
+            };
+        }
+        total.max(1) as f64
+    }
+
     pub fn get_classement_periode(
         &self,
         debut: NaiveDate,
         fin: NaiveDate,
     ) -> Result<Vec<(String, f64, usize)>, String> {
         self.with_conn(|conn| {
-            let feries = {
-                let mut map: HashMap<u32, Vec<String>> = HashMap::new();
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT DatePointage, Periode
-                         FROM JourFerie
-                         WHERE DatePointage BETWEEN ?1 AND ?2",
-                    )
-                    .map_err(|e| e.to_string())?;
-                let iter = stmt
-                    .query_map(
-                        params![
-                            debut.format("%Y-%m-%d").to_string(),
-                            fin.format("%Y-%m-%d").to_string()
-                        ],
-                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-                    )
-                    .map_err(|e| e.to_string())?;
-                for item in iter {
-                    let (d, p) = item.map_err(|e| e.to_string())?;
-                    if let Ok(date) = NaiveDate::parse_from_str(&d, "%Y-%m-%d") {
-                        map.entry(date.day()).or_default().push(p);
-                    }
-                }
-                map
-            };
+            let feries = Self::charger_feries_par_date(conn, debut, fin)?;
+            let jours_ouvrables = Self::jours_ouvrables_entre(debut, fin, &feries);
 
             let mut stmt = conn
                 .prepare(
@@ -920,20 +954,18 @@ impl Database {
             let mut acc: HashMap<String, (f64, usize)> = HashMap::new();
             for item in iter {
                 let (nom, date, ma, ms, aa, as_) = item.map_err(|e| e.to_string())?;
-                let jour = date.day();
-                let jour_entier = feries
-                    .get(&jour)
-                    .map(|v| v.iter().any(|p| p == "jour"))
-                    .unwrap_or(false);
-                if jour_entier {
+                if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+                    continue;
+                }
+                if Self::ferie_entier(&feries, date) {
                     continue;
                 }
                 let matin_ferie = feries
-                    .get(&jour)
+                    .get(&date)
                     .map(|v| v.iter().any(|p| p == "matin"))
                     .unwrap_or(false);
                 let aprem_ferie = feries
-                    .get(&jour)
+                    .get(&date)
                     .map(|v| v.iter().any(|p| p == "aprem"))
                     .unwrap_or(false);
                 let mut max_jour = 0.0;
@@ -997,8 +1029,8 @@ impl Database {
                 .map(|(nom, (somme, compte))| {
                     (
                         nom,
-                        if compte > 0 {
-                            somme / compte as f64
+                        if jours_ouvrables > 0.0 {
+                            somme / jours_ouvrables
                         } else {
                             0.0
                         },
