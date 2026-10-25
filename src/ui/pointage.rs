@@ -260,6 +260,10 @@ fn ferie_bloque_periode(ferie_jour: Option<&str>, matin: bool) -> bool {
     }
 }
 
+fn est_week_end(d: NaiveDate) -> bool {
+    matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+}
+
 fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState) {
     charger_stats_mois(db, state);
     charger_ferie_jour(db, state);
@@ -392,6 +396,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                         jour,
                     )
                     .unwrap();
+                    let week_end = est_week_end(date);
                     let pointe = stats.get(&jour).copied().unwrap_or(0) > 0;
                     let est_aujourdhui = date == aujourdhui;
                     let selectionne = date == date_sel;
@@ -409,7 +414,13 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                         .map(|v| v.iter().any(|p| p == "aprem"))
                         .unwrap_or(false);
 
-                    let (fond, texte, bordure) = if selectionne {
+                    let (fond, texte, bordure) = if week_end {
+                        (
+                            egui::Color32::from_rgb(235, 235, 235),
+                            egui::Color32::from_rgb(150, 150, 150),
+                            egui::Color32::from_rgb(210, 210, 210),
+                        )
+                    } else if selectionne {
                         (theme::ACCENT, egui::Color32::WHITE, theme::PRIMAIRE)
                     } else if est_ferie {
                         (theme::WARNING, egui::Color32::WHITE, theme::WARNING)
@@ -423,8 +434,13 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                         (theme::FOND, theme::PRIMAIRE, theme::BORDURE)
                     };
 
+                    let sens = if week_end {
+                        egui::Sense::hover()
+                    } else {
+                        egui::Sense::click()
+                    };
                     let (rect, resp) = ui
-                        .allocate_exact_size(egui::vec2(CASE_LARGEUR, CASE_HAUTEUR), egui::Sense::click());
+                        .allocate_exact_size(egui::vec2(CASE_LARGEUR, CASE_HAUTEUR), sens);
 
                     if ui.is_rect_visible(rect) {
                         let painter = ui.painter();
@@ -437,7 +453,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                             egui::FontId::proportional(15.0),
                             texte,
                         );
-                        if est_ferie_matin || est_ferie_aprem {
+                        if !week_end && (est_ferie_matin || est_ferie_aprem) {
                             painter.text(
                                 egui::pos2(rect.right() - 6.0, rect.top() + 4.0),
                                 egui::Align2::RIGHT_TOP,
@@ -448,10 +464,10 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                         }
                     }
 
-                    if resp.clicked() && !selectionne {
+                    if !week_end && resp.clicked() && !selectionne {
                         nouvelle_date = Some(date);
                     }
-                    if resp.hovered() {
+                    if !week_end && resp.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
                 }
@@ -575,6 +591,7 @@ fn employes_droite(
 
     let ferie_jour = state.ferie_jour.clone();
     let jour_ferie_entier = matches!(ferie_jour.as_deref(), Some("jour"));
+    let jour_week_end = est_week_end(state.date_selectionnee);
 
     egui::Frame::none()
         .fill(theme::FOND_BILAN)
@@ -630,6 +647,16 @@ fn employes_droite(
                 );
             });
 
+            if jour_week_end {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new("Week-end : pointage désactivé")
+                        .size(12.0)
+                        .color(theme::TEXTE_SECONDAIRE)
+                        .strong(),
+                );
+            }
+
             if let Some(f) = &ferie_jour {
                 ui.add_space(6.0);
                 let txt = match f.as_str() {
@@ -667,6 +694,16 @@ fn employes_droite(
                 ui.add_space(30.0);
             });
         });
+        return;
+    }
+
+    if jour_week_end {
+        ui.add_space(8.0);
+        theme::message_inline(
+            ui,
+            "Week-end : le pointage est désactivé pour cette date.",
+            false,
+        );
         return;
     }
 
@@ -766,7 +803,7 @@ fn employes_droite(
                                         &mut b.aprem_arr,
                                         &mut b.aprem_sort,
                                         14,
-                                        17,
+                                        16,
                                         aprem_bloque,
                                     );
                                 });
@@ -791,7 +828,7 @@ fn employes_droite(
                                     &mut b.aprem_arr,
                                     &mut b.aprem_sort,
                                     14,
-                                    17,
+                                    16,
                                     aprem_bloque,
                                 );
                             }

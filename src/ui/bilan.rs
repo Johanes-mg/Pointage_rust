@@ -565,6 +565,10 @@ fn badge_note(note: f64) -> (String, egui::Color32, egui::Color32) {
     }
 }
 
+fn est_week_end(d: NaiveDate) -> bool {
+    matches!(d.weekday(), Weekday::Sat | Weekday::Sun)
+}
+
 fn ferie_jour_entier(feries: &HashMap<u32, Vec<String>>, jour: u32) -> bool {
     feries
         .get(&jour)
@@ -608,7 +612,7 @@ fn calculer_note_apres_midi_10(pt: &EnregistrementPointage) -> Option<f64> {
         return None;
     }
     let limite_arrivee = NaiveTime::from_hms_opt(14, 15, 0).unwrap();
-    let limite_depart = NaiveTime::from_hms_opt(15, 45, 0).unwrap();
+    let limite_depart = NaiveTime::from_hms_opt(16, 0, 0).unwrap();
     let mut points = 0.0;
     if let Some(a) = arrivee {
         if a <= limite_arrivee {
@@ -673,7 +677,7 @@ fn jours_ouvrables_du_mois(
     let mut total = 0u32;
     for j in 1..=nb {
         let d = NaiveDate::from_ymd_opt(annee, mois, j).unwrap();
-        if matches!(d.weekday(), Weekday::Sat | Weekday::Sun) {
+        if est_week_end(d) {
             continue;
         }
         if ferie_jour_entier(feries, j) {
@@ -703,11 +707,10 @@ fn calculer_classement(
             let mut somme = 0.0_f64;
             let mut compte = 0_usize;
             for pt in pointages.iter().filter(|pt| pt.personnel_id == p.id) {
-                let jour = pt.date_pointage.day();
-                let d = pt.date_pointage;
-                if matches!(d.weekday(), Weekday::Sat | Weekday::Sun) {
+                if est_week_end(pt.date_pointage) {
                     continue;
                 }
+                let jour = pt.date_pointage.day();
                 if let Some(n) = note_effective(pt, feries, jour) {
                     somme += n;
                     compte += 1;
@@ -821,6 +824,7 @@ fn afficher_bilan_perso(
                 j,
             )
             .unwrap();
+            let week_end = est_week_end(date);
             let pointe = jours_pointes_set.contains(&j);
             let detail = state.date_detaillee == Some(date);
 
@@ -832,7 +836,12 @@ fn afficher_bilan_perso(
                 .get(&date)
                 .and_then(|pt| note_effective(pt, &feries, j));
 
-            let (fond, texte) = if detail {
+            let (fond, texte) = if week_end {
+                (
+                    egui::Color32::from_rgb(235, 235, 235),
+                    egui::Color32::from_rgb(150, 150, 150),
+                )
+            } else if detail {
                 (theme::ACCENT, egui::Color32::WHITE)
             } else if ferie_j {
                 (theme::WARNING, egui::Color32::WHITE)
@@ -849,8 +858,13 @@ fn afficher_bilan_perso(
                 }
             };
 
+            let sens = if week_end {
+                egui::Sense::hover()
+            } else {
+                egui::Sense::click()
+            };
             let (rect, resp) = ui
-                .allocate_exact_size(egui::vec2(TAILLE_CASE_JOUR, HAUTEUR_CASE_JOUR), egui::Sense::click());
+                .allocate_exact_size(egui::vec2(TAILLE_CASE_JOUR, HAUTEUR_CASE_JOUR), sens);
             if ui.is_rect_visible(rect) {
                 ui.painter().rect_filled(rect, theme::r_sm(), fond);
                 ui.painter().text(
@@ -860,7 +874,7 @@ fn afficher_bilan_perso(
                     egui::FontId::proportional(17.0),
                     texte,
                 );
-                if (ferie_m || ferie_a) && !ferie_j {
+                if !week_end && (ferie_m || ferie_a) && !ferie_j {
                     ui.painter().text(
                         egui::pos2(rect.right() - 5.0, rect.top() + 3.0),
                         egui::Align2::RIGHT_TOP,
@@ -870,7 +884,7 @@ fn afficher_bilan_perso(
                     );
                 }
             }
-            if resp.clicked() {
+            if !week_end && resp.clicked() {
                 nouvelle_detaillee = Some(date);
             }
         }
@@ -894,6 +908,10 @@ fn afficher_bilan_perso(
         )
         .unwrap();
 
+        if est_week_end(date) {
+            continue;
+        }
+
         if ferie_jour_entier(&feries, j) {
             continue;
         }
@@ -903,9 +921,7 @@ fn afficher_bilan_perso(
             Some(n) if n >= 10.0 => moyen += 1,
             Some(_) => mauvais += 1,
             None => {
-                if !est_week_end(date) {
-                    absent += 1;
-                }
+                absent += 1;
             }
         }
     }
@@ -921,6 +937,16 @@ fn afficher_bilan_perso(
                 .color(theme::PRIMAIRE)
                 .strong(),
         );
+
+        if est_week_end(d) {
+            ui.label(
+                egui::RichText::new("Week-end : non comptabilisé")
+                    .size(12.5)
+                    .color(theme::TEXTE_SECONDAIRE)
+                    .strong(),
+            );
+            return;
+        }
 
         let j = d.day();
         if ferie_jour_entier(&feries, j) {
@@ -1040,10 +1066,6 @@ fn barre_mois(ui: &mut egui::Ui, state: &mut BilanState) {
             .strong(),
         );
     });
-}
-
-fn est_week_end(d: NaiveDate) -> bool {
-    matches!(d.weekday(), Weekday::Sat | Weekday::Sun)
 }
 
 fn graphique_barres(ui: &mut egui::Ui, bien: i32, moyen: i32, mauvais: i32, absent: i32) {
