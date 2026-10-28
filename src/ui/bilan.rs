@@ -1,4 +1,7 @@
-use crate::database::Database;
+use crate::database::{
+    note_aprem_arrivee_5, note_aprem_sortie_5, note_matin_arrivee_5, note_matin_sortie_5,
+    Database,
+};
 use crate::models::{Conge, EnregistrementPointage, Personnel};
 use crate::theme;
 use chrono::{Datelike, Local, NaiveDate, NaiveTime, Weekday};
@@ -13,6 +16,8 @@ const MARGE_LATERALE: f32 = 12.0;
 const HAUTEUR_LIGNE_PERSONNEL: f32 = 24.0;
 const TAILLE_CASE_JOUR: f32 = 58.0;
 const HAUTEUR_CASE_JOUR: f32 = 52.0;
+
+const LARGEUR_MIN_COLONNES: f32 = COL_RANG + COL_NOTE + COL_JOURS + 2.0 * COL_GAP + 2.0 * MARGE_LATERALE + 80.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct ClassementEntry {
@@ -32,6 +37,7 @@ struct Colonnes {
 
 impl Colonnes {
     fn calculer(largeur_totale: f32) -> Self {
+        let largeur_totale = largeur_totale.max(LARGEUR_MIN_COLONNES);
         let x_rang = MARGE_LATERALE;
         let x_nom = x_rang + COL_RANG + COL_GAP;
         let x_jours = largeur_totale - MARGE_LATERALE - COL_JOURS;
@@ -44,6 +50,10 @@ impl Colonnes {
             x_jours,
             l_nom,
         }
+    }
+
+    fn largeur_requise(&self) -> f32 {
+        self.x_jours + COL_JOURS + MARGE_LATERALE
     }
 }
 
@@ -349,109 +359,121 @@ fn afficher_classement(
         return;
     }
 
-    let largeur_totale = ui.available_width();
+    let largeur_totale = ui.available_width().max(LARGEUR_MIN_COLONNES);
     let cols = Colonnes::calculer(largeur_totale);
 
-    entete_classement(ui, &cols);
+    let hauteur_requise = cols.largeur_requise();
+    let largeur_defilement = largeur_totale < hauteur_requise;
 
-    ui.add_space(4.0);
+    egui::ScrollArea::horizontal()
+        .id_source("bilan_classement_hscroll")
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            let largeur_utilisee = hauteur_requise.max(largeur_totale);
+            ui.set_min_width(largeur_utilisee);
 
-    let mut clic: Option<i64> = None;
+            entete_classement(ui, &cols, largeur_utilisee);
 
-    egui::ScrollArea::vertical()
-        .id_source("bilan_classement_scroll")
-        .auto_shrink([false, false])
-        .show_rows(
-            ui,
-            HAUTEUR_LIGNE,
-            classement.len(),
-            |ui, range| {
-                for i in range {
-                    let e = &classement[i];
-                    let row_bg = if i % 2 == 0 {
-                        theme::FOND_CARTE
-                    } else {
-                        theme::FOND
-                    };
+            ui.add_space(4.0);
 
-                    let (rect_range, reponse_range) = ui.allocate_exact_size(
-                        egui::vec2(largeur_totale, HAUTEUR_LIGNE),
-                        egui::Sense::click(),
-                    );
+            let mut clic: Option<i64> = None;
 
-                    if ui.is_rect_visible(rect_range) {
-                        let painter = ui.painter();
-                        painter.rect_filled(rect_range, theme::r_sm(), row_bg);
+            egui::ScrollArea::vertical()
+                .id_source("bilan_classement_scroll")
+                .auto_shrink([false, false])
+                .show_rows(
+                    ui,
+                    HAUTEUR_LIGNE,
+                    classement.len(),
+                    |ui, range| {
+                        for i in range {
+                            let e = &classement[i];
+                            let row_bg = if i % 2 == 0 {
+                                theme::FOND_CARTE
+                            } else {
+                                theme::FOND
+                            };
 
-                        let (note_txt, note_bg, note_fg) = badge_note(e.note_moyenne);
+                            let (rect_range, reponse_range) = ui.allocate_exact_size(
+                                egui::vec2(largeur_utilisee, HAUTEUR_LIGNE),
+                                egui::Sense::click(),
+                            );
 
-                        dessiner_cellule_texte(
-                            painter,
-                            rect_range,
-                            cols.x_rang,
-                            COL_RANG,
-                            &format!("{}", i + 1),
-                            egui::Align2::LEFT_CENTER,
-                            egui::FontId::proportional(12.0),
-                            theme::TEXTE_SECONDAIRE,
-                        );
+                            if ui.is_rect_visible(rect_range) {
+                                let painter = ui.painter();
+                                painter.rect_filled(rect_range, theme::r_sm(), row_bg);
 
-                        dessiner_cellule_texte(
-                            painter,
-                            rect_range,
-                            cols.x_nom,
-                            cols.l_nom,
-                            &e.nom,
-                            egui::Align2::LEFT_CENTER,
-                            egui::FontId::proportional(13.0),
-                            theme::TEXTE,
-                        );
+                                let (note_txt, note_bg, note_fg) = badge_note(e.note_moyenne);
 
-                        dessiner_cellule_note(
-                            painter,
-                            rect_range,
-                            cols.x_note,
-                            COL_NOTE,
-                            &note_txt,
-                            note_bg,
-                            note_fg,
-                        );
+                                dessiner_cellule_texte(
+                                    painter,
+                                    rect_range,
+                                    cols.x_rang,
+                                    COL_RANG,
+                                    &format!("{}", i + 1),
+                                    egui::Align2::LEFT_CENTER,
+                                    egui::FontId::proportional(12.0),
+                                    theme::TEXTE_SECONDAIRE,
+                                );
 
-                        dessiner_cellule_texte(
-                            painter,
-                            rect_range,
-                            cols.x_jours,
-                            COL_JOURS,
-                            &format!("{} j", e.nb_jours_pointes),
-                            egui::Align2::RIGHT_CENTER,
-                            egui::FontId::proportional(11.5),
-                            theme::TEXTE_SECONDAIRE,
-                        );
-                    }
+                                dessiner_cellule_texte(
+                                    painter,
+                                    rect_range,
+                                    cols.x_nom,
+                                    cols.l_nom,
+                                    &e.nom,
+                                    egui::Align2::LEFT_CENTER,
+                                    egui::FontId::proportional(13.0),
+                                    theme::TEXTE,
+                                );
 
-                    if reponse_range.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    if reponse_range.clicked() {
-                        clic = Some(e.personnel_id);
-                    }
+                                dessiner_cellule_note(
+                                    painter,
+                                    rect_range,
+                                    cols.x_note,
+                                    COL_NOTE,
+                                    &note_txt,
+                                    note_bg,
+                                    note_fg,
+                                );
 
-                    ui.add_space(2.0);
-                }
-            },
-        );
+                                dessiner_cellule_texte(
+                                    painter,
+                                    rect_range,
+                                    cols.x_jours,
+                                    COL_JOURS,
+                                    &format!("{} j", e.nb_jours_pointes),
+                                    egui::Align2::RIGHT_CENTER,
+                                    egui::FontId::proportional(11.5),
+                                    theme::TEXTE_SECONDAIRE,
+                                );
+                            }
 
-    if let Some(id) = clic {
-        state.personnel_selectionne = Some(id);
-        state.date_detaillee = None;
-        state.cache_personnel_id = None;
-    }
+                            if reponse_range.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if reponse_range.clicked() {
+                                clic = Some(e.personnel_id);
+                            }
+
+                            ui.add_space(2.0);
+                        }
+                    },
+                );
+
+            if let Some(id) = clic {
+                state.personnel_selectionne = Some(id);
+                state.date_detaillee = None;
+                state.cache_personnel_id = None;
+            }
+        });
+
+    let _ = largeur_defilement;
 }
 
-fn entete_classement(ui: &mut egui::Ui, cols: &Colonnes) {
-    let largeur_totale = ui.available_width();
+fn entete_classement(ui: &mut egui::Ui, cols: &Colonnes, largeur_utilisee: f32) {
     let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(largeur_totale, HAUTEUR_LIGNE), egui::Sense::hover());
+        ui.allocate_exact_size(egui::vec2(largeur_utilisee, HAUTEUR_LIGNE), egui::Sense::hover());
 
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
@@ -619,18 +641,12 @@ fn calculer_note_matin_10(pt: &EnregistrementPointage) -> Option<f64> {
     if arrivee.is_none() && depart.is_none() {
         return None;
     }
-    let limite_arrivee = NaiveTime::from_hms_opt(8, 15, 0).unwrap();
-    let limite_depart = NaiveTime::from_hms_opt(11, 45, 0).unwrap();
     let mut points = 0.0;
     if let Some(a) = arrivee {
-        if a <= limite_arrivee {
-            points += 5.0;
-        }
+        points += note_matin_arrivee_5(a);
     }
     if let Some(d) = depart {
-        if d >= limite_depart {
-            points += 5.0;
-        }
+        points += note_matin_sortie_5(d);
     }
     Some(points)
 }
@@ -641,18 +657,12 @@ fn calculer_note_apres_midi_10(pt: &EnregistrementPointage) -> Option<f64> {
     if arrivee.is_none() && depart.is_none() {
         return None;
     }
-    let limite_arrivee = NaiveTime::from_hms_opt(14, 15, 0).unwrap();
-    let limite_depart = NaiveTime::from_hms_opt(16, 0, 0).unwrap();
     let mut points = 0.0;
     if let Some(a) = arrivee {
-        if a <= limite_arrivee {
-            points += 5.0;
-        }
+        points += note_aprem_arrivee_5(a);
     }
     if let Some(d) = depart {
-        if d >= limite_depart {
-            points += 5.0;
-        }
+        points += note_aprem_sortie_5(d);
     }
     Some(points)
 }
@@ -1152,13 +1162,13 @@ fn afficher_bilan_perso(
                 let total_j = note_effective(pt, &feries, &conges, p_sel.id, d);
 
                 let note_m_txt = note_m
-                    .map(|n| format!("{:.0}/10", n))
+                    .map(|n| format!("{:.1}/10", n))
                     .unwrap_or_else(|| "- /10".into());
                 let note_a_txt = note_a
-                    .map(|n| format!("{:.0}/10", n))
+                    .map(|n| format!("{:.1}/10", n))
                     .unwrap_or_else(|| "- /10".into());
                 let total_txt = total_j
-                    .map(|n| format!("{:.0}/20", n))
+                    .map(|n| format!("{:.1}/20", n))
                     .unwrap_or_else(|| "- /20".into());
 
                 ui.label(format!("Matin : {}", note_m_txt));

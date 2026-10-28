@@ -919,7 +919,7 @@ fn employes_droite(
     ui: &mut egui::Ui,
     db: &Database,
     state: &mut PointageState,
-    largeur_panneau: f32,
+    _largeur_panneau: f32,
     hauteur_panneau: f32,
 ) {
     if state.cache_personnel.is_none() {

@@ -328,6 +328,7 @@ fn formulaire(
         state.message.clear();
         state.mot_de_passe.clear();
         state.confirmation.clear();
+        state.premier_affichage = true;
     }
 }
 

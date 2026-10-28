@@ -32,30 +32,42 @@ pub fn afficher(ui: &mut egui::Ui, _state: &mut InfosState) {
     paragraphe(ui, "10 points pour la matinée, 10 points pour l'après-midi.");
     ui.add_space(4.0);
     paragraphe(ui, "La note du jour est la somme des deux.");
+    ui.add_space(4.0);
+    paragraphe_doux(
+        ui,
+        "Chaque condition est un palier binaire : elle rapporte soit le maximum, soit zéro.",
+    );
 
     ui.add_space(28.0);
     titre_section(ui, "Matinée (10 points)");
     ui.add_space(10.0);
     ligne_regle(ui, "+ 5 points", theme::SUCCES, "Arrivée à 08h15 ou avant.");
+    ui.add_space(4.0);
+    ligne_regle(ui, "0 point", theme::DANGER, "Arrivée après 08h15.");
     ui.add_space(6.0);
     ligne_regle(ui, "+ 5 points", theme::SUCCES, "Départ à 11h45 ou après.");
-    ui.add_space(10.0);
-    paragraphe_doux(
-        ui,
-        "Une seule condition remplie : 5/10. Aucune condition : 0/10.",
-    );
+    ui.add_space(4.0);
+    ligne_regle(ui, "0 point", theme::DANGER, "Départ avant 11h45.");
 
     ui.add_space(28.0);
     titre_section(ui, "Après-midi (10 points)");
     ui.add_space(10.0);
     ligne_regle(ui, "+ 5 points", theme::SUCCES, "Arrivée à 14h15 ou avant.");
+    ui.add_space(4.0);
+    ligne_regle(ui, "0 point", theme::DANGER, "Arrivée après 14h15.");
     ui.add_space(6.0);
     ligne_regle(ui, "+ 5 points", theme::SUCCES, "Départ à 15h45 ou après.");
+    ui.add_space(4.0);
+    ligne_regle(ui, "0 point", theme::DANGER, "Départ avant 15h45.");
+
+    ui.add_space(28.0);
+    titre_section(ui, "Exemple");
     ui.add_space(10.0);
-    paragraphe_doux(
-        ui,
-        "Une seule condition remplie : 5/10. Aucune condition : 0/10.",
-    );
+    ligne_horaire(ui, "08h05", "12h00 et 14h00", "16h00", "= 20/20.");
+    ui.add_space(4.0);
+    ligne_horaire(ui, "06h00", "12h00 et 14h00", "16h00", "= 20/20.");
+    ui.add_space(4.0);
+    ligne_horaire(ui, "08h30", "12h00 et 14h00", "16h00", "= 15/20 (arrivée matin hors délai).");
 
     ui.add_space(28.0);
     titre_section(ui, "Jours fériés");
@@ -117,7 +129,7 @@ pub fn afficher(ui: &mut egui::Ui, _state: &mut InfosState) {
     ui.add_space(4.0);
     paragraphe_doux(
         ui,
-        "Après-midi : symétriquement, la matinée reste pointée et notée sur 10 ramenée sur 20.",
+        "Après-midi : symétriquement, la matinée reste pointée et notée sur 10 ramené sur 20.",
     );
     ui.add_space(4.0);
     paragraphe_doux(
@@ -140,7 +152,7 @@ pub fn afficher(ui: &mut egui::Ui, _state: &mut InfosState) {
     ui.add_space(40.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
         ui.label(
-            egui::RichText::new("© Johanes-mg")
+            egui::RichText::new("© Johanes-mg	.")
                 .size(11.0)
                 .color(theme::TEXTE_SECONDAIRE),
         );
@@ -217,6 +229,44 @@ fn ligne_seuil(ui: &mut egui::Ui, seuil: &str, couleur: egui::Color32, texte: &s
         ui.add_space(6.0);
         ui.add(
             egui::Label::new(egui::RichText::new(texte).size(13.0).color(theme::TEXTE)).wrap(),
+        );
+    });
+}
+
+fn ligne_horaire(
+    ui: &mut egui::Ui,
+    arrivee_matin: &str,
+    sortie_matin_et_aprem: &str,
+    sortie_aprem: &str,
+    conclusion: &str,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(arrivee_matin)
+                .size(13.5)
+                .color(theme::TEXTE),
+        );
+        ui.add_space(4.0);
+        theme::image_ui(ui, "right.png", 16.0, 16.0);
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(sortie_matin_et_aprem)
+                .size(13.5)
+                .color(theme::TEXTE),
+        );
+        ui.add_space(4.0);
+        theme::image_ui(ui, "right.png", 16.0, 16.0);
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(sortie_aprem)
+                .size(13.5)
+                .color(theme::TEXTE),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(conclusion)
+                .size(13.5)
+                .color(theme::TEXTE),
         );
     });
 }

@@ -22,6 +22,42 @@ pub struct ExportSnapshot {
     pub nom_entreprise: String,
 }
 
+pub fn note_matin_arrivee_5(t: NaiveTime) -> f64 {
+    let limite = NaiveTime::from_hms_opt(8, 15, 0).unwrap();
+    if t <= limite {
+        5.0
+    } else {
+        0.0
+    }
+}
+
+pub fn note_matin_sortie_5(t: NaiveTime) -> f64 {
+    let limite = NaiveTime::from_hms_opt(11, 45, 0).unwrap();
+    if t >= limite {
+        5.0
+    } else {
+        0.0
+    }
+}
+
+pub fn note_aprem_arrivee_5(t: NaiveTime) -> f64 {
+    let limite = NaiveTime::from_hms_opt(14, 15, 0).unwrap();
+    if t <= limite {
+        5.0
+    } else {
+        0.0
+    }
+}
+
+pub fn note_aprem_sortie_5(t: NaiveTime) -> f64 {
+    let limite = NaiveTime::from_hms_opt(15, 45, 0).unwrap();
+    if t >= limite {
+        5.0
+    } else {
+        0.0
+    }
+}
+
 impl Database {
     pub fn new() -> Result<Self, String> {
         let base = directories::ProjectDirs::from("mg", "Johanes", "Pointage")
@@ -102,6 +138,7 @@ impl Database {
 
         Self::creer_tables(&conn)?;
         Self::migrer_tables(&conn)?;
+        Self::migrer_utilisateurs(&conn)?;
 
         *self.utilisateur_courant.borrow_mut() = Some(normalise);
         *self.conn.borrow_mut() = Some(conn);
@@ -301,6 +338,55 @@ impl Database {
         Ok(())
     }
 
+    fn migrer_utilisateurs(conn: &Connection) -> Result<(), String> {
+        let mut stmt = conn
+            .prepare("SELECT Id, NomUtilisateur FROM Utilisateur ORDER BY Id")
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        let mut lignes: Vec<(i64, String)> = Vec::new();
+        for item in iter {
+            lignes.push(item.map_err(|e| e.to_string())?);
+        }
+        drop(stmt);
+
+        let mut vus: HashMap<String, i64> = HashMap::new();
+        let mut a_supprimer: Vec<i64> = Vec::new();
+        let mut a_renommer: Vec<(i64, String)> = Vec::new();
+
+        for (id, nom) in lignes {
+            let normalise = Self::normaliser_utilisateur(&nom);
+            if normalise.is_empty() {
+                a_supprimer.push(id);
+                continue;
+            }
+            if nom == normalise {
+                vus.entry(normalise).or_insert(id);
+            } else {
+                if vus.contains_key(&normalise) {
+                    a_supprimer.push(id);
+                } else {
+                    a_renommer.push((id, normalise.clone()));
+                    vus.insert(normalise, id);
+                }
+            }
+        }
+
+        for (id, nouveau) in a_renommer {
+            let _ = conn.execute(
+                "UPDATE Utilisateur SET NomUtilisateur = ?1 WHERE Id = ?2",
+                params![nouveau, id],
+            );
+        }
+
+        for id in a_supprimer {
+            let _ = conn.execute("DELETE FROM Utilisateur WHERE Id = ?1", params![id]);
+        }
+
+        Ok(())
+    }
+
     pub fn aucun_utilisateur(&self) -> Result<bool, String> {
         let bases = self.lister_bases()?;
         if bases.is_empty() {
@@ -358,6 +444,7 @@ impl Database {
         .map_err(|e| e.to_string())?;
         Self::creer_tables(&conn)?;
         Self::migrer_tables(&conn)?;
+        Self::migrer_utilisateurs(&conn)?;
 
         let existe: i64 = conn
             .query_row(
@@ -422,6 +509,8 @@ impl Database {
         if table_existe == 0 {
             return Ok(None);
         }
+
+        let _ = Self::migrer_utilisateurs(&conn);
 
         let row = conn
             .query_row(
@@ -1237,32 +1326,20 @@ impl Database {
 
                 if !matin_bloque && (ma.is_some() || ms.is_some()) {
                     a_matin = true;
-                    let lim_a = NaiveTime::from_hms_opt(8, 15, 0).unwrap();
-                    let lim_s = NaiveTime::from_hms_opt(11, 45, 0).unwrap();
                     if let Some(x) = ma {
-                        if x <= lim_a {
-                            pts += 5.0;
-                        }
+                        pts += note_matin_arrivee_5(x);
                     }
                     if let Some(x) = ms {
-                        if x >= lim_s {
-                            pts += 5.0;
-                        }
+                        pts += note_matin_sortie_5(x);
                     }
                 }
                 if !aprem_bloque && (aa.is_some() || as_.is_some()) {
                     a_aprem = true;
-                    let lim_a = NaiveTime::from_hms_opt(14, 15, 0).unwrap();
-                    let lim_s = NaiveTime::from_hms_opt(15, 45, 0).unwrap();
                     if let Some(x) = aa {
-                        if x <= lim_a {
-                            pts += 5.0;
-                        }
+                        pts += note_aprem_arrivee_5(x);
                     }
                     if let Some(x) = as_ {
-                        if x >= lim_s {
-                            pts += 5.0;
-                        }
+                        pts += note_aprem_sortie_5(x);
                     }
                 }
 
@@ -1434,6 +1511,41 @@ impl Database {
         })
     }
 
+    fn sauvegarde_avant_import(&self) -> Result<PathBuf, String> {
+        let actif = self
+            .chemin_actif
+            .borrow()
+            .clone()
+            .ok_or("Aucune base active a sauvegarder.".to_string())?;
+
+        let dossier_backups = self.dossier.join("backups");
+        std::fs::create_dir_all(&dossier_backups).map_err(|e| e.to_string())?;
+
+        let nom_fichier = actif
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("base")
+            .to_string();
+
+        let horodatage = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let nom_backup = format!("{}_{}.db", nom_fichier, horodatage);
+        let chemin_backup = dossier_backups.join(nom_backup);
+
+        if chemin_backup.exists() {
+            std::fs::remove_file(&chemin_backup).map_err(|e| e.to_string())?;
+        }
+
+        let dest_str = chemin_backup.to_string_lossy().to_string();
+        let esc = dest_str.replace('\'', "''");
+        self.with_conn(|conn| {
+            conn.execute_batch(&format!("VACUUM INTO '{}';", esc))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+
+        Ok(chemin_backup)
+    }
+
     pub fn importer_base(&self, source: &str) -> Result<(), String> {
         let source_path = PathBuf::from(source);
         if !source_path.exists() {
@@ -1452,6 +1564,8 @@ impl Database {
                 }
             }
         }
+
+        let _ = self.sauvegarde_avant_import()?;
 
         let verif = Connection::open_with_flags(
             &source_canon,
@@ -1639,81 +1753,162 @@ impl Database {
             conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
 
             let resultat = (|| -> Result<(), String> {
-                conn.execute("DELETE FROM Conge", [])
-                    .map_err(|e| e.to_string())?;
-                conn.execute("DELETE FROM EnregistrementPointage", [])
-                    .map_err(|e| e.to_string())?;
-                conn.execute("DELETE FROM JourFerie", [])
-                    .map_err(|e| e.to_string())?;
-                conn.execute("DELETE FROM Personnel", [])
-                    .map_err(|e| e.to_string())?;
-                conn.execute("DELETE FROM Parametre", [])
-                    .map_err(|e| e.to_string())?;
+                let ids_personnel_locaux: HashSet<i64> = {
+                    let mut stmt = conn
+                        .prepare("SELECT Id FROM Personnel")
+                        .map_err(|e| e.to_string())?;
+                    let iter = stmt
+                        .query_map([], |r| r.get::<_, i64>(0))
+                        .map_err(|e| e.to_string())?;
+                    let mut set = HashSet::new();
+                    for item in iter {
+                        set.insert(item.map_err(|e| e.to_string())?);
+                    }
+                    set
+                };
+
+                let cles_pointage_locales: HashSet<(i64, String)> = {
+                    let mut stmt = conn
+                        .prepare("SELECT PersonnelId, DatePointage FROM EnregistrementPointage")
+                        .map_err(|e| e.to_string())?;
+                    let iter = stmt
+                        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                        .map_err(|e| e.to_string())?;
+                    let mut set = HashSet::new();
+                    for item in iter {
+                        set.insert(item.map_err(|e| e.to_string())?);
+                    }
+                    set
+                };
+
+                let cles_ferie_locales: HashSet<(String, String)> = {
+                    let mut stmt = conn
+                        .prepare("SELECT DatePointage, Periode FROM JourFerie")
+                        .map_err(|e| e.to_string())?;
+                    let iter = stmt
+                        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                        .map_err(|e| e.to_string())?;
+                    let mut set = HashSet::new();
+                    for item in iter {
+                        set.insert(item.map_err(|e| e.to_string())?);
+                    }
+                    set
+                };
+
+                let ids_conge_locaux: HashSet<i64> = {
+                    let mut stmt = conn
+                        .prepare("SELECT Id FROM Conge")
+                        .map_err(|e| e.to_string())?;
+                    let iter = stmt
+                        .query_map([], |r| r.get::<_, i64>(0))
+                        .map_err(|e| e.to_string())?;
+                    let mut set = HashSet::new();
+                    for item in iter {
+                        set.insert(item.map_err(|e| e.to_string())?);
+                    }
+                    set
+                };
+
+                let cles_param_locales: HashSet<String> = {
+                    let mut stmt = conn
+                        .prepare("SELECT Cle FROM Parametre")
+                        .map_err(|e| e.to_string())?;
+                    let iter = stmt
+                        .query_map([], |r| r.get::<_, String>(0))
+                        .map_err(|e| e.to_string())?;
+                    let mut set = HashSet::new();
+                    for item in iter {
+                        set.insert(item.map_err(|e| e.to_string())?);
+                    }
+                    set
+                };
+
+                let mut ids_personnel_effectifs: HashSet<i64> = ids_personnel_locaux.clone();
 
                 {
                     let mut stmt = conn
                         .prepare(
-                            "INSERT INTO Personnel
+                            "INSERT OR IGNORE INTO Personnel
                              (Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale, DateArrivee)
                              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                         )
                         .map_err(|e| e.to_string())?;
                     for p in &personnel {
+                        if ids_personnel_locaux.contains(&p.0) {
+                            continue;
+                        }
                         stmt.execute(params![
                             p.0, p.1, p.2, p.3, p.4, p.5, p.6, p.7, p.8, p.9, p.10
                         ])
                         .map_err(|e| e.to_string())?;
+                        ids_personnel_effectifs.insert(p.0);
                     }
                 }
 
                 {
                     let mut stmt = conn
                         .prepare(
-                            "INSERT INTO EnregistrementPointage
+                            "INSERT OR IGNORE INTO EnregistrementPointage
                              (Id, PersonnelId, DatePointage,
                               MatinArrivee, MatinSortie, ApresMidiArrivee, ApresMidiSortie, Observation)
                              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
                         )
                         .map_err(|e| e.to_string())?;
                     for pt in &pointages {
-                        stmt.execute(params![
+                        if !ids_personnel_effectifs.contains(&pt.1) {
+                            continue;
+                        }
+                        let cle = (pt.1, pt.2.clone());
+                        if cles_pointage_locales.contains(&cle) {
+                            continue;
+                        }
+                        let _ = stmt.execute(params![
                             pt.0, pt.1, pt.2, pt.3, pt.4, pt.5, pt.6, pt.7
-                        ])
-                        .map_err(|e| e.to_string())?;
+                        ]);
                     }
                 }
 
                 {
                     let mut stmt = conn
                         .prepare(
-                            "INSERT INTO JourFerie (Id, DatePointage, Periode) VALUES (?1,?2,?3)",
+                            "INSERT OR IGNORE INTO JourFerie (Id, DatePointage, Periode) VALUES (?1,?2,?3)",
                         )
                         .map_err(|e| e.to_string())?;
                     for f in &feries {
-                        stmt.execute(params![f.0, f.1, f.2])
-                            .map_err(|e| e.to_string())?;
+                        let cle = (f.1.clone(), f.2.clone());
+                        if cles_ferie_locales.contains(&cle) {
+                            continue;
+                        }
+                        let _ = stmt.execute(params![f.0, f.1, f.2]);
                     }
                 }
 
                 {
                     let mut stmt = conn
                         .prepare(
-                            "INSERT INTO Conge (Id, PersonnelId, DateDebut, DateFin, Periode) VALUES (?1,?2,?3,?4,?5)",
+                            "INSERT OR IGNORE INTO Conge (Id, PersonnelId, DateDebut, DateFin, Periode) VALUES (?1,?2,?3,?4,?5)",
                         )
                         .map_err(|e| e.to_string())?;
                     for c in &conges {
-                        stmt.execute(params![c.0, c.1, c.2, c.3, c.4])
-                            .map_err(|e| e.to_string())?;
+                        if ids_conge_locaux.contains(&c.0) {
+                            continue;
+                        }
+                        if !ids_personnel_effectifs.contains(&c.1) {
+                            continue;
+                        }
+                        let _ = stmt.execute(params![c.0, c.1, c.2, c.3, c.4]);
                     }
                 }
 
                 {
                     let mut stmt = conn
-                        .prepare("INSERT INTO Parametre (Cle, Valeur) VALUES (?1,?2)")
+                        .prepare("INSERT OR IGNORE INTO Parametre (Cle, Valeur) VALUES (?1,?2)")
                         .map_err(|e| e.to_string())?;
                     for p in &parametres {
-                        stmt.execute(params![p.0, p.1])
-                            .map_err(|e| e.to_string())?;
+                        if cles_param_locales.contains(&p.0) {
+                            continue;
+                        }
+                        let _ = stmt.execute(params![p.0, p.1]);
                     }
                     conn.execute(
                         "INSERT OR IGNORE INTO Parametre (Cle, Valeur) VALUES ('NomEntreprise','Pointage')",
@@ -1722,10 +1917,34 @@ impl Database {
                     .map_err(|e| e.to_string())?;
                 }
 
-                let max_personnel = personnel.iter().map(|p| p.0).max().unwrap_or(0);
-                let max_pointage = pointages.iter().map(|p| p.0).max().unwrap_or(0);
-                let max_ferie = feries.iter().map(|f| f.0).max().unwrap_or(0);
-                let max_conge = conges.iter().map(|c| c.0).max().unwrap_or(0);
+                let max_personnel: i64 = conn
+                    .query_row(
+                        "SELECT COALESCE(MAX(Id), 0) FROM Personnel",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let max_pointage: i64 = conn
+                    .query_row(
+                        "SELECT COALESCE(MAX(Id), 0) FROM EnregistrementPointage",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let max_ferie: i64 = conn
+                    .query_row(
+                        "SELECT COALESCE(MAX(Id), 0) FROM JourFerie",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let max_conge: i64 = conn
+                    .query_row(
+                        "SELECT COALESCE(MAX(Id), 0) FROM Conge",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
 
                 for (table, maxid) in [
                     ("Personnel", max_personnel),
@@ -1742,7 +1961,7 @@ impl Database {
                         .unwrap_or(0);
                     if exists > 0 {
                         let _ = conn.execute(
-                            "UPDATE sqlite_sequence SET seq = ?1 WHERE name = ?2",
+                            "UPDATE sqlite_sequence SET seq = ?1 WHERE name = ?2 AND seq < ?1",
                             params![maxid, table],
                         );
                     } else {
