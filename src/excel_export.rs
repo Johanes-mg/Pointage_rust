@@ -34,6 +34,11 @@ pub fn exporter_tout(
         }
     }
 
+    let mut noms_par_id: HashMap<i64, String> = HashMap::new();
+    for p in &snapshot.personnel {
+        noms_par_id.insert(p.id, p.nom_complet());
+    }
+
     let mut wb = Workbook::new();
 
     let entete = Format::new()
@@ -48,7 +53,7 @@ pub fn exporter_tout(
     ws.set_name("Personnel").map_err(|e| e.to_string())?;
     let headers = [
         "MATRICULE", "NOM", "PRÉNOM", "TÉLÉPHONE", "ADRESSE", "EMAIL", "STATUT", "GRADE",
-        "SITUATION FAMILIALE",
+        "SITUATION FAMILIALE", "DATE ARRIVÉE",
     ];
     for (i, h) in headers.iter().enumerate() {
         ws.write_with_format(0, i as u16, *h, &entete)
@@ -65,6 +70,14 @@ pub fn exporter_tout(
         ws.write(r, 6, p.statut.as_deref().unwrap_or("")).ok();
         ws.write(r, 7, p.grade.as_deref().unwrap_or("")).ok();
         ws.write(r, 8, p.situation_familiale.as_deref().unwrap_or("")).ok();
+        ws.write(
+            r,
+            9,
+            p.date_arrivee
+                .map(|d| d.format("%d/%m/%Y").to_string())
+                .unwrap_or_default(),
+        )
+        .ok();
     }
     ws.autofit();
 
@@ -153,6 +166,30 @@ pub fn exporter_tout(
         ws.write(r, 0, &c.0).ok();
         ws.write(r, 1, (c.1 * 10.0).round() / 10.0).ok();
         ws.write(r, 2, c.2 as u32).ok();
+    }
+    ws.autofit();
+
+    let ws = wb.add_worksheet();
+    ws.set_name("Congés").map_err(|e| e.to_string())?;
+    let headers = ["PERSONNE", "DATE DÉBUT", "DATE FIN", "PÉRIODE", "DURÉE (jours)"];
+    for (i, h) in headers.iter().enumerate() {
+        ws.write_with_format(0, i as u16, *h, &entete)
+            .map_err(|e| e.to_string())?;
+    }
+    for (i, c) in snapshot.conges.iter().enumerate() {
+        let r = (i + 1) as u32;
+        let nom = noms_par_id.get(&c.personnel_id).cloned().unwrap_or_default();
+        let duree = (c.date_fin - c.date_debut).num_days() + 1;
+        let libelle_periode = match c.periode.as_str() {
+            "matin" => "Matin",
+            "aprem" => "Après-midi",
+            _ => "Jour entier",
+        };
+        ws.write(r, 0, nom).ok();
+        ws.write(r, 1, c.date_debut.format("%d/%m/%Y").to_string()).ok();
+        ws.write(r, 2, c.date_fin.format("%d/%m/%Y").to_string()).ok();
+        ws.write(r, 3, libelle_periode).ok();
+        ws.write(r, 4, duree as u32).ok();
     }
     ws.autofit();
 

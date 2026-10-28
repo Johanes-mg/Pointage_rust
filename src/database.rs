@@ -18,6 +18,7 @@ pub struct ExportSnapshot {
     pub pointages: Vec<EnregistrementPointage>,
     pub bilan: Vec<BilanPersonnel>,
     pub feries: HashMap<String, Vec<String>>,
+    pub conges: Vec<Conge>,
     pub nom_entreprise: String,
 }
 
@@ -154,7 +155,8 @@ impl Database {
                 Email TEXT,
                 Statut TEXT,
                 Grade TEXT,
-                SituationFamiliale TEXT
+                SituationFamiliale TEXT,
+                DateArrivee TEXT
             );
             CREATE TABLE IF NOT EXISTS EnregistrementPointage (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,6 +176,14 @@ impl Database {
                 Periode TEXT NOT NULL CHECK (Periode IN ('jour','matin','aprem')),
                 UNIQUE (DatePointage, Periode)
             );
+            CREATE TABLE IF NOT EXISTS Conge (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                PersonnelId INTEGER NOT NULL,
+                DateDebut TEXT NOT NULL,
+                DateFin TEXT NOT NULL,
+                Periode TEXT NOT NULL DEFAULT 'jour' CHECK (Periode IN ('jour','matin','aprem')),
+                FOREIGN KEY (PersonnelId) REFERENCES Personnel(Id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS Parametre (
                 Cle TEXT PRIMARY KEY,
                 Valeur TEXT
@@ -183,6 +193,8 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_pointage_perso_date ON EnregistrementPointage(PersonnelId, DatePointage);
             CREATE INDEX IF NOT EXISTS idx_personnel_nom ON Personnel(Nom, Prenom);
             CREATE INDEX IF NOT EXISTS idx_ferie_date ON JourFerie(DatePointage);
+            CREATE INDEX IF NOT EXISTS idx_conge_personnel ON Conge(PersonnelId);
+            CREATE INDEX IF NOT EXISTS idx_conge_dates ON Conge(DateDebut, DateFin);
             INSERT OR IGNORE INTO Parametre (Cle, Valeur) VALUES ('NomEntreprise','Pointage');",
         )
         .map_err(|e| e.to_string())?;
@@ -238,6 +250,52 @@ impl Database {
                 );
                 CREATE INDEX IF NOT EXISTS idx_ferie_date ON JourFerie(DatePointage);",
             );
+        }
+
+        let date_arrivee_existe: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('Personnel') WHERE name = 'DateArrivee'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if date_arrivee_existe == 0 {
+            let _ = conn.execute_batch("ALTER TABLE Personnel ADD COLUMN DateArrivee TEXT;");
+        }
+
+        let conge_existe: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Conge'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if conge_existe == 0 {
+            let _ = conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS Conge (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    PersonnelId INTEGER NOT NULL,
+                    DateDebut TEXT NOT NULL,
+                    DateFin TEXT NOT NULL,
+                    Periode TEXT NOT NULL DEFAULT 'jour' CHECK (Periode IN ('jour','matin','aprem')),
+                    FOREIGN KEY (PersonnelId) REFERENCES Personnel(Id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_conge_personnel ON Conge(PersonnelId);
+                CREATE INDEX IF NOT EXISTS idx_conge_dates ON Conge(DateDebut, DateFin);",
+            );
+        } else {
+            let periode_existe: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('Conge') WHERE name = 'Periode'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if periode_existe == 0 {
+                let _ = conn.execute_batch(
+                    "ALTER TABLE Conge ADD COLUMN Periode TEXT NOT NULL DEFAULT 'jour';",
+                );
+            }
         }
 
         Ok(())
@@ -442,12 +500,15 @@ impl Database {
     fn query_personnel(conn: &Connection) -> Result<Vec<Personnel>, String> {
         let mut stmt = conn
             .prepare(
-                "SELECT Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale
+                "SELECT Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale, DateArrivee
                  FROM Personnel ORDER BY Nom, Prenom",
             )
             .map_err(|e| e.to_string())?;
         let iter = stmt
             .query_map([], |r| {
+                let date_str: Option<String> = r.get(10)?;
+                let date_arrivee =
+                    date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 Ok(Personnel {
                     id: r.get(0)?,
                     nom: r.get(1)?,
@@ -459,6 +520,7 @@ impl Database {
                     statut: r.get(7)?,
                     grade: r.get(8)?,
                     situation_familiale: r.get(9)?,
+                    date_arrivee,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -467,12 +529,13 @@ impl Database {
 
     pub fn ajouter_personnel(&self, p: &Personnel) -> Result<i64, String> {
         self.with_conn(|conn| {
+            let date_str = p.date_arrivee.map(|d| d.format("%Y-%m-%d").to_string());
             conn.execute(
-                "INSERT INTO Personnel (Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                "INSERT INTO Personnel (Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale, DateArrivee)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
                 params![
                     p.nom, p.prenom, p.matricule, p.telephone, p.adresse,
-                    p.email, p.statut, p.grade, p.situation_familiale
+                    p.email, p.statut, p.grade, p.situation_familiale, date_str
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -482,12 +545,13 @@ impl Database {
 
     pub fn modifier_personnel(&self, p: &Personnel) -> Result<(), String> {
         self.with_conn(|conn| {
+            let date_str = p.date_arrivee.map(|d| d.format("%Y-%m-%d").to_string());
             conn.execute(
                 "UPDATE Personnel SET Nom=?1, Prenom=?2, Matricule=?3, Telephone=?4, Adresse=?5,
-                 Email=?6, Statut=?7, Grade=?8, SituationFamiliale=?9 WHERE Id=?10",
+                 Email=?6, Statut=?7, Grade=?8, SituationFamiliale=?9, DateArrivee=?10 WHERE Id=?11",
                 params![
                     p.nom, p.prenom, p.matricule, p.telephone, p.adresse,
-                    p.email, p.statut, p.grade, p.situation_familiale, p.id
+                    p.email, p.statut, p.grade, p.situation_familiale, date_str, p.id
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -787,6 +851,140 @@ impl Database {
         })
     }
 
+    pub fn get_conges_personnel(&self, personnel_id: i64) -> Result<Vec<Conge>, String> {
+        self.with_conn(|conn| Self::query_conges_personnel(conn, personnel_id))
+    }
+
+    fn query_conges_personnel(
+        conn: &Connection,
+        personnel_id: i64,
+    ) -> Result<Vec<Conge>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT Id, PersonnelId, DateDebut, DateFin, Periode
+                 FROM Conge WHERE PersonnelId = ?1 ORDER BY DateDebut",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(params![personnel_id], |r| {
+                let dd: String = r.get(2)?;
+                let df: String = r.get(3)?;
+                Ok(Conge {
+                    id: r.get(0)?,
+                    personnel_id: r.get(1)?,
+                    date_debut: NaiveDate::parse_from_str(&dd, "%Y-%m-%d")
+                        .unwrap_or_else(|_| chrono::Local::now().date_naive()),
+                    date_fin: NaiveDate::parse_from_str(&df, "%Y-%m-%d")
+                        .unwrap_or_else(|_| chrono::Local::now().date_naive()),
+                    periode: r.get(4).unwrap_or_else(|_| "jour".to_string()),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn get_conges_du_mois(
+        &self,
+        annee: i32,
+        mois: u32,
+    ) -> Result<Vec<Conge>, String> {
+        self.with_conn(|conn| {
+            let debut_mois = NaiveDate::from_ymd_opt(annee, mois, 1).unwrap();
+            let nb = jours_dans_mois(annee, mois);
+            let fin_mois = NaiveDate::from_ymd_opt(annee, mois, nb).unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT Id, PersonnelId, DateDebut, DateFin, Periode
+                     FROM Conge
+                     WHERE DateFin >= ?1 AND DateDebut <= ?2
+                     ORDER BY PersonnelId, DateDebut",
+                )
+                .map_err(|e| e.to_string())?;
+            let iter = stmt
+                .query_map(
+                    params![
+                        debut_mois.format("%Y-%m-%d").to_string(),
+                        fin_mois.format("%Y-%m-%d").to_string()
+                    ],
+                    |r| {
+                        let dd: String = r.get(2)?;
+                        let df: String = r.get(3)?;
+                        Ok(Conge {
+                            id: r.get(0)?,
+                            personnel_id: r.get(1)?,
+                            date_debut: NaiveDate::parse_from_str(&dd, "%Y-%m-%d")
+                                .unwrap_or_else(|_| chrono::Local::now().date_naive()),
+                            date_fin: NaiveDate::parse_from_str(&df, "%Y-%m-%d")
+                                .unwrap_or_else(|_| chrono::Local::now().date_naive()),
+                            periode: r.get(4).unwrap_or_else(|_| "jour".to_string()),
+                        })
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn conges_du_jour_pour(
+        &self,
+        personnel_id: i64,
+        date: NaiveDate,
+    ) -> Result<Vec<String>, String> {
+        self.with_conn(|conn| {
+            let date_str = date.format("%Y-%m-%d").to_string();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT Periode FROM Conge
+                     WHERE PersonnelId = ?1 AND DateDebut <= ?2 AND DateFin >= ?2",
+                )
+                .map_err(|e| e.to_string())?;
+            let iter = stmt
+                .query_map(params![personnel_id, date_str], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            let mut out = Vec::new();
+            for p in iter {
+                out.push(p.map_err(|e| e.to_string())?);
+            }
+            Ok(out)
+        })
+    }
+
+    pub fn ajouter_conge(
+        &self,
+        personnel_id: i64,
+        debut: NaiveDate,
+        fin: NaiveDate,
+        periode: &str,
+    ) -> Result<i64, String> {
+        if fin < debut {
+            return Err("La date de fin doit etre posterieure ou egale a la date de debut.".into());
+        }
+        if !matches!(periode, "jour" | "matin" | "aprem") {
+            return Err("Periode invalide.".into());
+        }
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO Conge (PersonnelId, DateDebut, DateFin, Periode) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    personnel_id,
+                    debut.format("%Y-%m-%d").to_string(),
+                    fin.format("%Y-%m-%d").to_string(),
+                    periode
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(conn.last_insert_rowid())
+        })
+    }
+
+    pub fn supprimer_conge(&self, conge_id: i64) -> Result<(), String> {
+        self.with_conn(|conn| {
+            conn.execute("DELETE FROM Conge WHERE Id = ?1", params![conge_id])
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+    }
+
     fn query_bilan(
         conn: &Connection,
         debut: NaiveDate,
@@ -879,6 +1077,46 @@ impl Database {
         Ok(map)
     }
 
+    fn charger_conges_par_date(
+        conn: &Connection,
+        debut: NaiveDate,
+        fin: NaiveDate,
+    ) -> Result<HashMap<i64, Vec<(NaiveDate, NaiveDate, String)>>, String> {
+        let mut map: HashMap<i64, Vec<(NaiveDate, NaiveDate, String)>> = HashMap::new();
+        let mut stmt = conn
+            .prepare(
+                "SELECT PersonnelId, DateDebut, DateFin, Periode
+                 FROM Conge
+                 WHERE DateFin >= ?1 AND DateDebut <= ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(
+                params![
+                    debut.format("%Y-%m-%d").to_string(),
+                    fin.format("%Y-%m-%d").to_string()
+                ],
+                |r| {
+                    let dd: String = r.get(1)?;
+                    let df: String = r.get(2)?;
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        NaiveDate::parse_from_str(&dd, "%Y-%m-%d")
+                            .unwrap_or_else(|_| chrono::Local::now().date_naive()),
+                        NaiveDate::parse_from_str(&df, "%Y-%m-%d")
+                            .unwrap_or_else(|_| chrono::Local::now().date_naive()),
+                        r.get::<_, String>(3).unwrap_or_else(|_| "jour".to_string()),
+                    ))
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        for item in iter {
+            let (pid, dd, df, per) = item.map_err(|e| e.to_string())?;
+            map.entry(pid).or_default().push((dd, df, per));
+        }
+        Ok(map)
+    }
+
     fn ferie_entier(feries: &HashMap<NaiveDate, Vec<String>>, date: NaiveDate) -> bool {
         feries
             .get(&date)
@@ -886,24 +1124,31 @@ impl Database {
             .unwrap_or(false)
     }
 
-    fn jours_ouvrables_entre(
-        debut: NaiveDate,
-        fin: NaiveDate,
-        feries: &HashMap<NaiveDate, Vec<String>>,
-    ) -> f64 {
-        let mut total = 0u32;
-        let mut d = debut;
-        while d <= fin {
-            let weekend = matches!(d.weekday(), Weekday::Sat | Weekday::Sun);
-            if !weekend && !Self::ferie_entier(feries, d) {
-                total += 1;
+    fn periode_conges(
+        conges: &HashMap<i64, Vec<(NaiveDate, NaiveDate, String)>>,
+        personnel_id: i64,
+        date: NaiveDate,
+    ) -> (bool, bool) {
+        let mut jour_entier = false;
+        let mut matin = false;
+        let mut aprem = false;
+        if let Some(plages) = conges.get(&personnel_id) {
+            for (d, f, p) in plages {
+                if date >= *d && date <= *f {
+                    match p.as_str() {
+                        "jour" => jour_entier = true,
+                        "matin" => matin = true,
+                        "aprem" => aprem = true,
+                        _ => {}
+                    }
+                }
             }
-            d = match d.succ_opt() {
-                Some(n) => n,
-                None => break,
-            };
         }
-        total.max(1) as f64
+        if jour_entier {
+            (true, true)
+        } else {
+            (matin, aprem)
+        }
     }
 
     pub fn get_classement_periode(
@@ -913,11 +1158,11 @@ impl Database {
     ) -> Result<Vec<(String, f64, usize)>, String> {
         self.with_conn(|conn| {
             let feries = Self::charger_feries_par_date(conn, debut, fin)?;
-            let jours_ouvrables = Self::jours_ouvrables_entre(debut, fin, &feries);
+            let conges = Self::charger_conges_par_date(conn, debut, fin)?;
 
             let mut stmt = conn
                 .prepare(
-                    "SELECT p.Nom || ' ' || p.Prenom AS Nom,
+                    "SELECT p.Id, p.Nom || ' ' || p.Prenom AS Nom,
                             ep.DatePointage, ep.MatinArrivee, ep.MatinSortie,
                             ep.ApresMidiArrivee, ep.ApresMidiSortie
                      FROM EnregistrementPointage ep
@@ -933,19 +1178,20 @@ impl Database {
                         fin.format("%Y-%m-%d").to_string()
                     ],
                     |r| {
-                        let date_str: String = r.get(1)?;
+                        let date_str: String = r.get(2)?;
                         let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
                             .unwrap_or_else(|_| chrono::Local::now().date_naive());
                         let parse_time = |opt: Option<String>| -> Option<NaiveTime> {
                             opt.and_then(|s| NaiveTime::parse_from_str(&s, "%H:%M:%S").ok())
                         };
                         Ok((
-                            r.get::<_, String>(0)?,
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, String>(1)?,
                             date,
-                            parse_time(r.get(2)?),
                             parse_time(r.get(3)?),
                             parse_time(r.get(4)?),
                             parse_time(r.get(5)?),
+                            parse_time(r.get(6)?),
                         ))
                     },
                 )
@@ -953,26 +1199,32 @@ impl Database {
 
             let mut acc: HashMap<String, (f64, usize)> = HashMap::new();
             for item in iter {
-                let (nom, date, ma, ms, aa, as_) = item.map_err(|e| e.to_string())?;
+                let (pid, nom, date, ma, ms, aa, as_) = item.map_err(|e| e.to_string())?;
                 if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
                     continue;
                 }
                 if Self::ferie_entier(&feries, date) {
                     continue;
                 }
-                let matin_ferie = feries
-                    .get(&date)
-                    .map(|v| v.iter().any(|p| p == "matin"))
-                    .unwrap_or(false);
-                let aprem_ferie = feries
-                    .get(&date)
-                    .map(|v| v.iter().any(|p| p == "aprem"))
-                    .unwrap_or(false);
+                let (conge_matin, conge_aprem) = Self::periode_conges(&conges, pid, date);
+                if conge_matin && conge_aprem {
+                    continue;
+                }
+                let matin_bloque = conge_matin
+                    || feries
+                        .get(&date)
+                        .map(|v| v.iter().any(|p| p == "matin"))
+                        .unwrap_or(false);
+                let aprem_bloque = conge_aprem
+                    || feries
+                        .get(&date)
+                        .map(|v| v.iter().any(|p| p == "aprem"))
+                        .unwrap_or(false);
                 let mut max_jour = 0.0;
-                if !matin_ferie {
+                if !matin_bloque {
                     max_jour += 10.0;
                 }
-                if !aprem_ferie {
+                if !aprem_bloque {
                     max_jour += 10.0;
                 }
                 if max_jour <= 0.0 {
@@ -983,7 +1235,7 @@ impl Database {
                 let mut a_matin = false;
                 let mut a_aprem = false;
 
-                if !matin_ferie && (ma.is_some() || ms.is_some()) {
+                if !matin_bloque && (ma.is_some() || ms.is_some()) {
                     a_matin = true;
                     let lim_a = NaiveTime::from_hms_opt(8, 15, 0).unwrap();
                     let lim_s = NaiveTime::from_hms_opt(11, 45, 0).unwrap();
@@ -998,7 +1250,7 @@ impl Database {
                         }
                     }
                 }
-                if !aprem_ferie && (aa.is_some() || as_.is_some()) {
+                if !aprem_bloque && (aa.is_some() || as_.is_some()) {
                     a_aprem = true;
                     let lim_a = NaiveTime::from_hms_opt(14, 15, 0).unwrap();
                     let lim_s = NaiveTime::from_hms_opt(15, 45, 0).unwrap();
@@ -1023,6 +1275,22 @@ impl Database {
                 e.0 += note20;
                 e.1 += 1;
             }
+
+            let jours_ouvrables = {
+                let mut total = 0u32;
+                let mut d = debut;
+                while d <= fin {
+                    let weekend = matches!(d.weekday(), Weekday::Sat | Weekday::Sun);
+                    if !weekend && !Self::ferie_entier(&feries, d) {
+                        total += 1;
+                    }
+                    d = match d.succ_opt() {
+                        Some(n) => n,
+                        None => break,
+                    };
+                }
+                total.max(1) as f64
+            };
 
             let mut out: Vec<(String, f64, usize)> = acc
                 .into_iter()
@@ -1085,6 +1353,45 @@ impl Database {
                     }
                     map
                 };
+                let conges = {
+                    let mut out = Vec::new();
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT Id, PersonnelId, DateDebut, DateFin, Periode FROM Conge
+                             WHERE DateFin >= ?1 AND DateDebut <= ?2
+                             ORDER BY PersonnelId, DateDebut",
+                        )
+                        .map_err(|e| e.to_string())?;
+                    let iter = stmt
+                        .query_map(
+                            params![
+                                debut.format("%Y-%m-%d").to_string(),
+                                fin.format("%Y-%m-%d").to_string()
+                            ],
+                            |r| {
+                                let dd: String = r.get(2)?;
+                                let df: String = r.get(3)?;
+                                Ok(Conge {
+                                    id: r.get(0)?,
+                                    personnel_id: r.get(1)?,
+                                    date_debut: NaiveDate::parse_from_str(&dd, "%Y-%m-%d")
+                                        .unwrap_or_else(|_| {
+                                            chrono::Local::now().date_naive()
+                                        }),
+                                    date_fin: NaiveDate::parse_from_str(&df, "%Y-%m-%d")
+                                        .unwrap_or_else(|_| {
+                                            chrono::Local::now().date_naive()
+                                        }),
+                                    periode: r.get(4).unwrap_or_else(|_| "jour".to_string()),
+                                })
+                            },
+                        )
+                        .map_err(|e| e.to_string())?;
+                    for item in iter {
+                        out.push(item.map_err(|e| e.to_string())?);
+                    }
+                    out
+                };
                 let nom_entreprise = conn
                     .query_row(
                         "SELECT Valeur FROM Parametre WHERE Cle='NomEntreprise'",
@@ -1097,6 +1404,7 @@ impl Database {
                     pointages,
                     bilan,
                     feries,
+                    conges,
                     nom_entreprise,
                 })
             })();
@@ -1196,29 +1504,62 @@ impl Database {
             return Err("Le fichier source a un schema EnregistrementPointage incompatible.".into());
         }
 
+        let a_date_arrivee: i64 = verif
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('Personnel') WHERE name = 'DateArrivee'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        let a_conge: i64 = verif
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Conge'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        let a_conge_periode: i64 = if a_conge > 0 {
+            verif
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('Conge') WHERE name = 'Periode'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
         type LignePersonnel = (
             i64, String, String,
             Option<String>, Option<String>, Option<String>,
             Option<String>, Option<String>, Option<String>, Option<String>,
+            Option<String>,
         );
         type LignePointage = (
             i64, i64, String,
             Option<String>, Option<String>, Option<String>, Option<String>,
             Option<String>,
         );
+        type LigneConge = (i64, i64, String, String, String);
 
         let personnel: Vec<LignePersonnel> = {
-            let mut stmt = verif
-                .prepare(
-                    "SELECT Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale
-                     FROM Personnel ORDER BY Id",
-                )
-                .map_err(|e| e.to_string())?;
+            let sql = if a_date_arrivee > 0 {
+                "SELECT Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale, DateArrivee
+                 FROM Personnel ORDER BY Id"
+            } else {
+                "SELECT Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale, NULL
+                 FROM Personnel ORDER BY Id"
+            };
+            let mut stmt = verif.prepare(sql).map_err(|e| e.to_string())?;
             let iter = stmt
                 .query_map([], |r| {
                     Ok((
                         r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
                         r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
+                        r.get(10)?,
                     ))
                 })
                 .map_err(|e| e.to_string())?;
@@ -1254,6 +1595,23 @@ impl Database {
             iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
         };
 
+        let conges: Vec<LigneConge> = if a_conge > 0 {
+            let sql = if a_conge_periode > 0 {
+                "SELECT Id, PersonnelId, DateDebut, DateFin, Periode FROM Conge ORDER BY Id"
+            } else {
+                "SELECT Id, PersonnelId, DateDebut, DateFin, 'jour' FROM Conge ORDER BY Id"
+            };
+            let mut stmt = verif.prepare(sql).map_err(|e| e.to_string())?;
+            let iter = stmt
+                .query_map([], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })
+                .map_err(|e| e.to_string())?;
+            iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        } else {
+            Vec::new()
+        };
+
         let parametres: Vec<(String, Option<String>)> = {
             let existe: i64 = verif
                 .query_row(
@@ -1281,6 +1639,8 @@ impl Database {
             conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
 
             let resultat = (|| -> Result<(), String> {
+                conn.execute("DELETE FROM Conge", [])
+                    .map_err(|e| e.to_string())?;
                 conn.execute("DELETE FROM EnregistrementPointage", [])
                     .map_err(|e| e.to_string())?;
                 conn.execute("DELETE FROM JourFerie", [])
@@ -1294,13 +1654,13 @@ impl Database {
                     let mut stmt = conn
                         .prepare(
                             "INSERT INTO Personnel
-                             (Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale)
-                             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                             (Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale, DateArrivee)
+                             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                         )
                         .map_err(|e| e.to_string())?;
                     for p in &personnel {
                         stmt.execute(params![
-                            p.0, p.1, p.2, p.3, p.4, p.5, p.6, p.7, p.8, p.9
+                            p.0, p.1, p.2, p.3, p.4, p.5, p.6, p.7, p.8, p.9, p.10
                         ])
                         .map_err(|e| e.to_string())?;
                     }
@@ -1337,6 +1697,18 @@ impl Database {
 
                 {
                     let mut stmt = conn
+                        .prepare(
+                            "INSERT INTO Conge (Id, PersonnelId, DateDebut, DateFin, Periode) VALUES (?1,?2,?3,?4,?5)",
+                        )
+                        .map_err(|e| e.to_string())?;
+                    for c in &conges {
+                        stmt.execute(params![c.0, c.1, c.2, c.3, c.4])
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+
+                {
+                    let mut stmt = conn
                         .prepare("INSERT INTO Parametre (Cle, Valeur) VALUES (?1,?2)")
                         .map_err(|e| e.to_string())?;
                     for p in &parametres {
@@ -1353,11 +1725,13 @@ impl Database {
                 let max_personnel = personnel.iter().map(|p| p.0).max().unwrap_or(0);
                 let max_pointage = pointages.iter().map(|p| p.0).max().unwrap_or(0);
                 let max_ferie = feries.iter().map(|f| f.0).max().unwrap_or(0);
+                let max_conge = conges.iter().map(|c| c.0).max().unwrap_or(0);
 
                 for (table, maxid) in [
                     ("Personnel", max_personnel),
                     ("EnregistrementPointage", max_pointage),
                     ("JourFerie", max_ferie),
+                    ("Conge", max_conge),
                 ] {
                     let exists: i64 = conn
                         .query_row(
@@ -1393,5 +1767,20 @@ impl Database {
                 }
             }
         })
+    }
+}
+
+fn jours_dans_mois(annee: i32, mois: u32) -> u32 {
+    match mois {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (annee % 4 == 0 && annee % 100 != 0) || annee % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
     }
 }

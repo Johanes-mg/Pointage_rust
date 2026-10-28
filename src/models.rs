@@ -24,6 +24,7 @@ pub struct Personnel {
     pub statut: Option<String>,
     pub grade: Option<String>,
     pub situation_familiale: Option<String>,
+    pub date_arrivee: Option<chrono::NaiveDate>,
 }
 
 impl Personnel {
@@ -55,6 +56,16 @@ pub struct BilanPersonnel {
     pub total_heures: String,
     pub moyenne_arrivee: String,
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct Conge {
+    pub id: i64,
+    pub personnel_id: i64,
+    pub date_debut: chrono::NaiveDate,
+    pub date_fin: chrono::NaiveDate,
+    pub periode: String,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MentionPonctualite {

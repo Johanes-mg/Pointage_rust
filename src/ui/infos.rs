@@ -83,9 +83,52 @@ pub fn afficher(ui: &mut egui::Ui, _state: &mut InfosState) {
     );
 
     ui.add_space(28.0);
+    titre_section(ui, "Congés");
+    ui.add_space(10.0);
+    paragraphe(
+        ui,
+        "Un congé couvre une plage de dates pour un membre, avec une période précise.",
+    );
+    ui.add_space(4.0);
+    paragraphe_doux(
+        ui,
+        "Trois périodes disponibles : jour entier, matin, après-midi.",
+    );
+    ui.add_space(4.0);
+    paragraphe_doux(
+        ui,
+        "Le bouton congé (icône) sur la page Pointage ouvre une fenêtre pour saisir la plage et la période.",
+    );
+    ui.add_space(4.0);
+    paragraphe_doux(
+        ui,
+        "Pendant un congé, le pointage est bloqué pour la période concernée uniquement.",
+    );
+    ui.add_space(4.0);
+    paragraphe_doux(
+        ui,
+        "Jour entier : la journée est entièrement exclue du bilan et du classement.",
+    );
+    ui.add_space(4.0);
+    paragraphe_doux(
+        ui,
+        "Matin : seule la matinée est exclue ; l'après-midi reste pointé et noté sur 10 ramené sur 20.",
+    );
+    ui.add_space(4.0);
+    paragraphe_doux(
+        ui,
+        "Après-midi : symétriquement, la matinée reste pointée et notée sur 10 ramenée sur 20.",
+    );
+    ui.add_space(4.0);
+    paragraphe_doux(
+        ui,
+        "Les jours de congé apparaissent en orange dans le bilan personnel.",
+    );
+
+    ui.add_space(28.0);
     titre_section(ui, "Note du jour (sur 20)");
     ui.add_space(10.0);
-    paragraphe(ui, "Note du jour = note matin + note après-midi, hors périodes fériées.");
+    paragraphe(ui, "Note du jour = note matin + note après-midi, hors périodes fériées et congés.");
 
     ui.add_space(16.0);
     ligne_seuil(ui, "16 / 20 et plus", theme::SUCCES, "Bien");

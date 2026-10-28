@@ -1,5 +1,5 @@
 use crate::database::Database;
-use crate::models::{EnregistrementPointage, Personnel};
+use crate::models::{Conge, EnregistrementPointage, Personnel};
 use crate::theme;
 use chrono::{Datelike, Local, NaiveDate, NaiveTime, Weekday};
 use std::collections::{HashMap, HashSet};
@@ -57,6 +57,7 @@ pub struct BilanState {
     pub cache_pointages: HashMap<NaiveDate, EnregistrementPointage>,
     pub cache_jours_pointes: Vec<u32>,
     pub cache_feries: HashMap<u32, Vec<String>>,
+    pub cache_conges: Vec<Conge>,
     pub cache_classement: Option<Vec<ClassementEntry>>,
     pub recherche: String,
 }
@@ -74,6 +75,7 @@ impl BilanState {
             cache_pointages: HashMap::new(),
             cache_jours_pointes: Vec::new(),
             cache_feries: HashMap::new(),
+            cache_conges: Vec::new(),
             cache_classement: None,
             recherche: String::new(),
         }
@@ -86,6 +88,7 @@ impl BilanState {
         self.cache_pointages.clear();
         self.cache_jours_pointes.clear();
         self.cache_feries.clear();
+        self.cache_conges.clear();
         self.cache_classement = None;
     }
 
@@ -95,6 +98,7 @@ impl BilanState {
         self.cache_pointages.clear();
         self.cache_jours_pointes.clear();
         self.cache_feries.clear();
+        self.cache_conges.clear();
         self.cache_classement = None;
         self.date_detaillee = None;
     }
@@ -320,9 +324,14 @@ fn afficher_classement(
     if state.cache_classement.is_none() {
         let annee = state.mois_affiche.year();
         let mois = state.mois_affiche.month();
-        let feries = db.get_jours_feries_du_mois(annee, mois).unwrap_or_default();
+        let feries = db
+            .get_jours_feries_du_mois(annee, mois)
+            .unwrap_or_default();
+        let conges = db.get_conges_du_mois(annee, mois).unwrap_or_default();
         state.cache_feries = feries.clone();
-        state.cache_classement = Some(calculer_classement(db, personnel, annee, mois, &feries));
+        state.cache_conges = conges.clone();
+        state.cache_classement =
+            Some(calculer_classement(db, personnel, annee, mois, &feries, &conges));
     }
 
     let classement = state.cache_classement.clone().unwrap_or_default();
@@ -583,6 +592,27 @@ fn ferie_periode(feries: &HashMap<u32, Vec<String>>, jour: u32, periode: &str) -
         .unwrap_or(false)
 }
 
+fn conge_periodes(conges: &[Conge], personnel_id: i64, date: NaiveDate) -> (bool, bool) {
+    let mut matin = false;
+    let mut aprem = false;
+    let mut jour_entier = false;
+    for c in conges {
+        if c.personnel_id == personnel_id && date >= c.date_debut && date <= c.date_fin {
+            match c.periode.as_str() {
+                "jour" => jour_entier = true,
+                "matin" => matin = true,
+                "aprem" => aprem = true,
+                _ => {}
+            }
+        }
+    }
+    if jour_entier {
+        (true, true)
+    } else {
+        (matin, aprem)
+    }
+}
+
 fn calculer_note_matin_10(pt: &EnregistrementPointage) -> Option<f64> {
     let arrivee = pt.matin_arrivee;
     let depart = pt.matin_sortie;
@@ -630,30 +660,38 @@ fn calculer_note_apres_midi_10(pt: &EnregistrementPointage) -> Option<f64> {
 fn note_effective(
     pt: &EnregistrementPointage,
     feries: &HashMap<u32, Vec<String>>,
-    jour: u32,
+    conges: &[Conge],
+    personnel_id: i64,
+    date: NaiveDate,
 ) -> Option<f64> {
+    let jour = date.day();
     if ferie_jour_entier(feries, jour) {
         return None;
     }
-    let matin_ferie = ferie_periode(feries, jour, "matin");
-    let aprem_ferie = ferie_periode(feries, jour, "aprem");
+    let (conge_m, conge_a) = conge_periodes(conges, personnel_id, date);
+    if conge_m && conge_a {
+        return None;
+    }
 
-    let note_m = if matin_ferie {
+    let matin_bloque = conge_m || ferie_periode(feries, jour, "matin");
+    let aprem_bloque = conge_a || ferie_periode(feries, jour, "aprem");
+
+    let note_m = if matin_bloque {
         None
     } else {
         calculer_note_matin_10(pt)
     };
-    let note_a = if aprem_ferie {
+    let note_a = if aprem_bloque {
         None
     } else {
         calculer_note_apres_midi_10(pt)
     };
 
     let mut max = 0.0;
-    if !matin_ferie {
+    if !matin_bloque {
         max += 10.0;
     }
-    if !aprem_ferie {
+    if !aprem_bloque {
         max += 10.0;
     }
     if max <= 0.0 {
@@ -668,10 +706,12 @@ fn note_effective(
     }
 }
 
-fn jours_ouvrables_du_mois(
+fn jours_ouvrables_perso(
+    p: &Personnel,
     annee: i32,
     mois: u32,
     feries: &HashMap<u32, Vec<String>>,
+    conges: &[Conge],
 ) -> u32 {
     let nb = jours_dans_mois(annee, mois);
     let mut total = 0u32;
@@ -681,6 +721,15 @@ fn jours_ouvrables_du_mois(
             continue;
         }
         if ferie_jour_entier(feries, j) {
+            continue;
+        }
+        if let Some(arrivee) = p.date_arrivee {
+            if d < arrivee {
+                continue;
+            }
+        }
+        let (cm, ca) = conge_periodes(conges, p.id, d);
+        if cm && ca {
             continue;
         }
         total += 1;
@@ -694,24 +743,33 @@ fn calculer_classement(
     annee: i32,
     mois: u32,
     feries: &HashMap<u32, Vec<String>>,
+    conges: &[Conge],
 ) -> Vec<ClassementEntry> {
     let nb = jours_dans_mois(annee, mois);
     let debut = NaiveDate::from_ymd_opt(annee, mois, 1).unwrap();
     let fin = NaiveDate::from_ymd_opt(annee, mois, nb).unwrap();
     let pointages = db.get_pointages_periode(debut, fin).unwrap_or_default();
-    let jours_ouvrables = jours_ouvrables_du_mois(annee, mois, feries) as f64;
 
     let mut resultats: Vec<ClassementEntry> = personnel
         .iter()
         .map(|p| {
+            let jours_ouvrables = jours_ouvrables_perso(p, annee, mois, feries, conges) as f64;
             let mut somme = 0.0_f64;
             let mut compte = 0_usize;
             for pt in pointages.iter().filter(|pt| pt.personnel_id == p.id) {
                 if est_week_end(pt.date_pointage) {
                     continue;
                 }
-                let jour = pt.date_pointage.day();
-                if let Some(n) = note_effective(pt, feries, jour) {
+                if let Some(arrivee) = p.date_arrivee {
+                    if pt.date_pointage < arrivee {
+                        continue;
+                    }
+                }
+                let (cm, ca) = conge_periodes(conges, p.id, pt.date_pointage);
+                if cm && ca {
+                    continue;
+                }
+                if let Some(n) = note_effective(pt, feries, conges, p.id, pt.date_pointage) {
                     somme += n;
                     compte += 1;
                 }
@@ -754,6 +812,15 @@ fn afficher_bilan_perso(
     );
     ui.add_space(10.0);
 
+    if let Some(d) = p_sel.date_arrivee {
+        ui.label(
+            egui::RichText::new(format!("Arrivée dans l'entreprise : {}", d.format("%d/%m/%Y")))
+                .size(12.0)
+                .color(theme::TEXTE_SECONDAIRE),
+        );
+        ui.add_space(6.0);
+    }
+
     barre_mois(ui, state);
 
     ui.add_space(10.0);
@@ -777,7 +844,10 @@ fn afficher_bilan_perso(
             )
             .unwrap_or_default();
 
-        state.cache_feries = db.get_jours_feries_du_mois(annee, mois).unwrap_or_default();
+        state.cache_feries = db
+            .get_jours_feries_du_mois(annee, mois)
+            .unwrap_or_default();
+        state.cache_conges = db.get_conges_du_mois(annee, mois).unwrap_or_default();
 
         state.cache_pointages = pointages
             .into_iter()
@@ -794,11 +864,14 @@ fn afficher_bilan_perso(
     let dict = state.cache_pointages.clone();
     let jours_pointes_set: HashSet<u32> = state.cache_jours_pointes.iter().copied().collect();
     let feries = state.cache_feries.clone();
+    let conges = state.cache_conges.clone();
 
-    let jours_ouvrables = jours_ouvrables_du_mois(
+    let jours_ouvrables = jours_ouvrables_perso(
+        p_sel,
         state.mois_affiche.year(),
         state.mois_affiche.month(),
         &feries,
+        &conges,
     );
 
     ui.label(
@@ -827,6 +900,13 @@ fn afficher_bilan_perso(
             let week_end = est_week_end(date);
             let pointe = jours_pointes_set.contains(&j);
             let detail = state.date_detaillee == Some(date);
+            let avant_arrivee = p_sel
+                .date_arrivee
+                .map(|a| date < a)
+                .unwrap_or(false);
+            let (conge_m, conge_a) = conge_periodes(&conges, p_sel.id, date);
+            let conge_total = conge_m && conge_a;
+            let conge_partiel = (conge_m ^ conge_a) && !conge_total;
 
             let ferie_j = ferie_jour_entier(&feries, j);
             let ferie_m = ferie_periode(&feries, j, "matin");
@@ -834,9 +914,16 @@ fn afficher_bilan_perso(
 
             let note = dict
                 .get(&date)
-                .and_then(|pt| note_effective(pt, &feries, j));
+                .and_then(|pt| note_effective(pt, &feries, &conges, p_sel.id, date));
 
-            let (fond, texte) = if week_end {
+            let (fond, texte) = if avant_arrivee {
+                (
+                    egui::Color32::from_rgb(240, 240, 240),
+                    egui::Color32::from_rgb(190, 190, 190),
+                )
+            } else if conge_total {
+                (theme::FERIE_DEMI_BG, theme::WARNING)
+            } else if week_end {
                 (
                     egui::Color32::from_rgb(235, 235, 235),
                     egui::Color32::from_rgb(150, 150, 150),
@@ -845,7 +932,7 @@ fn afficher_bilan_perso(
                 (theme::ACCENT, egui::Color32::WHITE)
             } else if ferie_j {
                 (theme::WARNING, egui::Color32::WHITE)
-            } else if ferie_m || ferie_a {
+            } else if conge_partiel || ferie_m || ferie_a {
                 (theme::FERIE_DEMI_BG, theme::WARNING)
             } else if !pointe {
                 (theme::FOND, theme::PRIMAIRE)
@@ -858,7 +945,7 @@ fn afficher_bilan_perso(
                 }
             };
 
-            let sens = if week_end {
+            let sens = if week_end || avant_arrivee || conge_total {
                 egui::Sense::hover()
             } else {
                 egui::Sense::click()
@@ -874,17 +961,37 @@ fn afficher_bilan_perso(
                     egui::FontId::proportional(17.0),
                     texte,
                 );
-                if !week_end && (ferie_m || ferie_a) && !ferie_j {
+                if !week_end && !avant_arrivee && !conge_total {
+                    if (ferie_m || ferie_a) && !ferie_j {
+                        ui.painter().text(
+                            egui::pos2(rect.right() - 5.0, rect.top() + 3.0),
+                            egui::Align2::RIGHT_TOP,
+                            ".",
+                            egui::FontId::proportional(11.0),
+                            theme::WARNING,
+                        );
+                    }
+                    if conge_partiel {
+                        ui.painter().text(
+                            egui::pos2(rect.center().x, rect.bottom() - 6.0),
+                            egui::Align2::CENTER_BOTTOM,
+                            "C",
+                            egui::FontId::proportional(9.0),
+                            theme::WARNING,
+                        );
+                    }
+                }
+                if conge_total {
                     ui.painter().text(
-                        egui::pos2(rect.right() - 5.0, rect.top() + 3.0),
-                        egui::Align2::RIGHT_TOP,
-                        ".",
-                        egui::FontId::proportional(11.0),
+                        egui::pos2(rect.center().x, rect.bottom() - 6.0),
+                        egui::Align2::CENTER_BOTTOM,
+                        "C",
+                        egui::FontId::proportional(9.0),
                         theme::WARNING,
                     );
                 }
             }
-            if !week_end && resp.clicked() {
+            if !week_end && !avant_arrivee && !conge_total && resp.clicked() {
                 nouvelle_detaillee = Some(date);
             }
         }
@@ -900,6 +1007,7 @@ fn afficher_bilan_perso(
     let mut moyen = 0;
     let mut mauvais = 0;
     let mut absent = 0;
+    let mut en_conge_count = 0;
     for j in 1..=nb {
         let date = NaiveDate::from_ymd_opt(
             state.mois_affiche.year(),
@@ -911,12 +1019,24 @@ fn afficher_bilan_perso(
         if est_week_end(date) {
             continue;
         }
-
+        if let Some(arrivee) = p_sel.date_arrivee {
+            if date < arrivee {
+                continue;
+            }
+        }
+        let (cm, ca) = conge_periodes(&conges, p_sel.id, date);
+        if cm && ca {
+            en_conge_count += 1;
+            continue;
+        }
         if ferie_jour_entier(&feries, j) {
             continue;
         }
 
-        match dict.get(&date).and_then(|pt| note_effective(pt, &feries, j)) {
+        match dict
+            .get(&date)
+            .and_then(|pt| note_effective(pt, &feries, &conges, p_sel.id, date))
+        {
             Some(n) if n >= 16.0 => bien += 1,
             Some(n) if n >= 10.0 => moyen += 1,
             Some(_) => mauvais += 1,
@@ -927,7 +1047,7 @@ fn afficher_bilan_perso(
     }
 
     ui.add_space(8.0);
-    graphique_barres(ui, bien, moyen, mauvais, absent);
+    graphique_barres(ui, bien, moyen, mauvais, absent, en_conge_count);
 
     if let Some(d) = state.date_detaillee {
         ui.add_space(14.0);
@@ -937,6 +1057,29 @@ fn afficher_bilan_perso(
                 .color(theme::PRIMAIRE)
                 .strong(),
         );
+
+        if let Some(arrivee) = p_sel.date_arrivee {
+            if d < arrivee {
+                ui.label(
+                    egui::RichText::new("Date antérieure à l'arrivée dans l'entreprise")
+                        .size(12.5)
+                        .color(theme::TEXTE_SECONDAIRE)
+                        .strong(),
+                );
+                return;
+            }
+        }
+
+        let (cm, ca) = conge_periodes(&conges, p_sel.id, d);
+        if cm && ca {
+            ui.label(
+                egui::RichText::new("Jour de congé : non comptabilisé")
+                    .size(12.5)
+                    .color(theme::WARNING)
+                    .strong(),
+            );
+            return;
+        }
 
         if est_week_end(d) {
             ui.label(
@@ -971,6 +1114,21 @@ fn afficher_bilan_perso(
                     .strong(),
             );
         }
+        if cm && !ca {
+            ui.label(
+                egui::RichText::new("Congé matin")
+                    .size(12.5)
+                    .color(theme::WARNING)
+                    .strong(),
+            );
+        } else if ca && !cm {
+            ui.label(
+                egui::RichText::new("Congé après-midi")
+                    .size(12.5)
+                    .color(theme::WARNING)
+                    .strong(),
+            );
+        }
 
         match dict.get(&d) {
             None => {
@@ -979,19 +1137,19 @@ fn afficher_bilan_perso(
                 }
             }
             Some(pt) => {
-                let matin_ferie = ferie_periode(&feries, j, "matin");
-                let aprem_ferie = ferie_periode(&feries, j, "aprem");
-                let note_m = if matin_ferie {
+                let matin_bloque = ferie_periode(&feries, j, "matin") || cm;
+                let aprem_bloque = ferie_periode(&feries, j, "aprem") || ca;
+                let note_m = if matin_bloque {
                     None
                 } else {
                     calculer_note_matin_10(pt)
                 };
-                let note_a = if aprem_ferie {
+                let note_a = if aprem_bloque {
                     None
                 } else {
                     calculer_note_apres_midi_10(pt)
                 };
-                let total_j = note_effective(pt, &feries, j);
+                let total_j = note_effective(pt, &feries, &conges, p_sel.id, d);
 
                 let note_m_txt = note_m
                     .map(|n| format!("{:.0}/10", n))
@@ -1068,13 +1226,21 @@ fn barre_mois(ui: &mut egui::Ui, state: &mut BilanState) {
     });
 }
 
-fn graphique_barres(ui: &mut egui::Ui, bien: i32, moyen: i32, mauvais: i32, absent: i32) {
-    let total = (bien + moyen + mauvais + absent).max(1);
+fn graphique_barres(
+    ui: &mut egui::Ui,
+    bien: i32,
+    moyen: i32,
+    mauvais: i32,
+    absent: i32,
+    en_conge: i32,
+) {
+    let total = (bien + moyen + mauvais + absent + en_conge).max(1);
     let entrees = [
         (bien, theme::SUCCES),
         (moyen, theme::WARNING),
         (mauvais, theme::DANGER),
         (absent, theme::TEXTE_SECONDAIRE),
+        (en_conge, theme::WARNING),
     ];
     for (valeur, couleur) in entrees {
         if valeur == 0 {

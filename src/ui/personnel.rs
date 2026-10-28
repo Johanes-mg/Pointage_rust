@@ -1,6 +1,7 @@
 use crate::database::Database;
 use crate::models::Personnel;
 use crate::theme;
+use chrono::{Datelike, Local, NaiveDate};
 
 const HAUTEUR_LIGNE: f32 = 34.0;
 const PAD_CELL: f32 = 10.0;
@@ -19,6 +20,7 @@ pub struct PersonnelState {
     pub statut: String,
     pub grade: String,
     pub situation: String,
+    pub date_arrivee: Option<NaiveDate>,
     pub selection_id: Option<i64>,
     pub message: String,
     pub message_ok: bool,
@@ -40,6 +42,7 @@ impl PersonnelState {
             statut: String::new(),
             grade: String::new(),
             situation: String::new(),
+            date_arrivee: None,
             selection_id: None,
             message: String::new(),
             message_ok: true,
@@ -64,6 +67,7 @@ impl PersonnelState {
         self.statut.clear();
         self.grade.clear();
         self.situation.clear();
+        self.date_arrivee = None;
         self.selection_id = None;
     }
 
@@ -77,6 +81,7 @@ impl PersonnelState {
         self.statut = p.statut.clone().unwrap_or_default();
         self.grade = p.grade.clone().unwrap_or_default();
         self.situation = p.situation_familiale.clone().unwrap_or_default();
+        self.date_arrivee = p.date_arrivee;
         self.selection_id = Some(p.id);
     }
 }
@@ -195,6 +200,94 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
             enter_final = true;
         }
     });
+    ui.add_space(10.0);
+
+    ui.label(
+        egui::RichText::new("Date d'arrivée dans l'entreprise")
+            .color(theme::TEXTE_SECONDAIRE)
+            .size(12.0)
+            .strong(),
+    );
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let mut jour = state.date_arrivee.map(|d| d.day()).unwrap_or(1);
+        let mut mois = state.date_arrivee.map(|d| d.month()).unwrap_or(1);
+        let mut annee = state
+            .date_arrivee
+            .map(|d| d.year())
+            .unwrap_or_else(|| Local::now().year());
+
+        let mut change = false;
+
+        ui.label(
+            egui::RichText::new("JJ")
+                .size(10.5)
+                .color(theme::TEXTE_SECONDAIRE)
+                .strong(),
+        );
+        if ui
+            .add(
+                egui::DragValue::new(&mut jour)
+                    .range(1..=31)
+                    .speed(1)
+                    .custom_formatter(|n, _| format!("{:02}", n as i64)),
+            )
+            .changed()
+        {
+            change = true;
+        }
+
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("MM")
+                .size(10.5)
+                .color(theme::TEXTE_SECONDAIRE)
+                .strong(),
+        );
+        if ui
+            .add(
+                egui::DragValue::new(&mut mois)
+                    .range(1..=12)
+                    .speed(1)
+                    .custom_formatter(|n, _| format!("{:02}", n as i64)),
+            )
+            .changed()
+        {
+            change = true;
+        }
+
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("AAAA")
+                .size(10.5)
+                .color(theme::TEXTE_SECONDAIRE)
+                .strong(),
+        );
+        if ui
+            .add(
+                egui::DragValue::new(&mut annee)
+                    .range(1900..=2100)
+                    .speed(1),
+            )
+            .changed()
+        {
+            change = true;
+        }
+
+        if change {
+            if let Some(d) = NaiveDate::from_ymd_opt(annee, mois, jour) {
+                state.date_arrivee = Some(d);
+            }
+        }
+
+        if state.date_arrivee.is_some() {
+            ui.add_space(8.0);
+            if theme::bouton_image_seule(ui, "effacer.png", 28.0, 14.0) {
+                state.date_arrivee = None;
+            }
+        }
+    });
+
     ui.add_space(10.0);
 
     ui.label(
@@ -686,5 +779,6 @@ fn lire(state: &PersonnelState) -> Personnel {
         statut: opt(&state.statut),
         grade: opt(&state.grade),
         situation_familiale: opt(&state.situation),
+        date_arrivee: state.date_arrivee,
     }
 }
