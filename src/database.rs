@@ -1961,7 +1961,7 @@ impl Database {
                         .unwrap_or(0);
                     if exists > 0 {
                         let _ = conn.execute(
-                            "UPDATE sqlite_sequence SET seq = ?1 WHERE name = ?2 AND seq < ?1",
+                            "UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = ?2",
                             params![maxid, table],
                         );
                     } else {

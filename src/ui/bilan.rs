@@ -697,23 +697,23 @@ fn note_effective(
         calculer_note_apres_midi_10(pt)
     };
 
-    let mut max = 0.0;
-    if !matin_bloque {
-        max += 10.0;
+    let mut pts_bruts = 0.0;
+    let mut pts_max = 0.0;
+
+    if let Some(m) = note_m {
+        pts_bruts += m;
+        pts_max += 10.0;
     }
-    if !aprem_bloque {
-        max += 10.0;
+    if let Some(a) = note_a {
+        pts_bruts += a;
+        pts_max += 10.0;
     }
-    if max <= 0.0 {
+
+    if pts_max <= 0.0 {
         return None;
     }
 
-    match (note_m, note_a) {
-        (None, None) => None,
-        (Some(m), None) => Some((m / max) * 20.0),
-        (None, Some(a)) => Some((a / max) * 20.0),
-        (Some(m), Some(a)) => Some(((m + a) / max) * 20.0),
-    }
+    Some((pts_bruts / pts_max) * 20.0)
 }
 
 fn jours_ouvrables_perso(
