@@ -4,7 +4,7 @@ use crate::database::{
 };
 use crate::models::{Conge, EnregistrementPointage, Personnel};
 use crate::theme;
-use chrono::{Datelike, Local, NaiveDate, NaiveTime, Weekday};
+use chrono::{Datelike, Local, NaiveDate, Weekday};
 use std::collections::{HashMap, HashSet};
 
 const COL_RANG: f32 = 50.0;

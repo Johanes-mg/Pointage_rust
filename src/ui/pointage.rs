@@ -188,7 +188,7 @@ fn afficher_dialog_conge(ctx: &egui::Context, db: &Database, state: &mut Pointag
     let mut fermer = false;
     let mut valider = false;
 
-    egui::Window::new("Gestion des congés")
+    egui::Window::new("Gestion de congé/Permission")
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -311,8 +311,8 @@ fn afficher_dialog_conge(ctx: &egui::Context, db: &Database, state: &mut Pointag
             ui.horizontal_wrapped(|ui| {
                 if theme::bouton_image_texte(
                     ui,
-                    "enregistrer.png",
-                    "Ajouter le congé",
+                    "ajouter.png",
+                    "Ajouter",
                     200.0,
                     40.0,
                 ) {
