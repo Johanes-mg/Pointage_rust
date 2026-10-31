@@ -1,7 +1,9 @@
+
 use crate::database::Database;
 use crate::models::Utilisateur;
 use crate::theme;
 use crate::ui::{accueil, bilan, compte, infos, personnel, pointage, Page};
+use std::collections::HashMap;
 
 pub struct MainWindowState {
     pub page: Page,
@@ -12,6 +14,9 @@ pub struct MainWindowState {
     pub bilan: bilan::BilanState,
     pub compte: compte::CompteState,
     pub infos: infos::InfosState,
+    pub notification: String,
+    pub notification_ok: bool,
+    messages_precedents: HashMap<&'static str, (String, bool)>,
 }
 
 impl MainWindowState {
@@ -25,7 +30,36 @@ impl MainWindowState {
             bilan: bilan::BilanState::new(),
             compte: compte::CompteState::new(utilisateur),
             infos: infos::InfosState::new(),
+            notification: String::new(),
+            notification_ok: true,
+            messages_precedents: HashMap::new(),
         }
+    }
+
+    fn synchroniser_notifications(&mut self) -> bool {
+        let messages = [
+            ("accueil", self.accueil.message.clone(), self.accueil.message_ok),
+            ("personnel", self.personnel.message.clone(), self.personnel.message_ok),
+            ("pointage", self.pointage.message_action.clone(), self.pointage.message_action_ok),
+            ("profil", self.compte.message_profil.clone(), self.compte.message_profil_ok),
+            ("mot_de_passe", self.compte.message_mdp.clone(), self.compte.message_mdp_ok),
+            ("base", self.compte.message_bdd.clone(), self.compte.message_bdd_ok),
+        ];
+
+        let mut notification_modifiee = false;
+        for (cle, texte, ok) in messages {
+            let nouvelle_valeur = (texte.clone(), ok);
+            let precedente = self.messages_precedents.get(cle);
+            if precedente != Some(&nouvelle_valeur) {
+                self.messages_precedents.insert(cle, nouvelle_valeur);
+                if !texte.is_empty() && !notification_modifiee {
+                    self.notification = texte;
+                    self.notification_ok = ok;
+                    notification_modifiee = true;
+                }
+            }
+        }
+        notification_modifiee
     }
 
     fn rafraichir_caches(&mut self) {
@@ -46,8 +80,9 @@ impl MainWindowState {
             self.personnel.mutation_effectuee = false;
         }
 
-        if actuelle == Page::Pointage && ancienne != Some(Page::Pointage) {
-            self.pointage.invalider_cache();
+        if self.pointage.mutation_effectuee {
+            self.bilan.invalider_cache();
+            self.pointage.mutation_effectuee = false;
         }
 
         if actuelle == Page::Bilan && ancienne != Some(Page::Bilan) {
@@ -153,6 +188,16 @@ pub fn afficher(
                 ui.set_max_width(ui.available_width());
                 ui.set_width(ui.available_width());
 
+                if !state.notification.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        theme::message_inline(ui, &state.notification, state.notification_ok);
+                        if ui.small_button("×").on_hover_text("Fermer le message").clicked() {
+                            state.notification.clear();
+                        }
+                    });
+                    ui.add_space(10.0);
+                }
+
                 if page == Page::Bilan {
                     bilan::afficher(ui, db, &mut state.bilan);
                 } else {
@@ -171,6 +216,10 @@ pub fn afficher(
                 }
             });
         });
+
+    if state.synchroniser_notifications() {
+        ctx.request_repaint();
+    }
 
     action
 }
@@ -229,3 +278,4 @@ fn bouton_nav_image(
     }
     resp.clicked()
 }
+

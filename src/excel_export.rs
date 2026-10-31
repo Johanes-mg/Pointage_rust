@@ -24,16 +24,16 @@ pub fn exporter_tout(
 
     let snapshot = db.exporter_snapshot(debut, fin)?;
 
-    let mut matricules: HashMap<String, String> = HashMap::new();
+    let mut matricules_par_id: HashMap<i64, String> = HashMap::new();
+    let mut identites_par_id: HashMap<i64, (String, String)> = HashMap::new();
     for p in &snapshot.personnel {
-        let cle = format!("{} {}", p.nom, p.prenom).trim().to_string();
+        identites_par_id.insert(p.id, (p.nom.clone(), p.prenom.clone()));
         if let Some(m) = &p.matricule {
             if !m.trim().is_empty() {
-                matricules.insert(cle, m.trim().to_string());
+                matricules_par_id.insert(p.id, m.trim().to_string());
             }
         }
     }
-
     let mut noms_par_id: HashMap<i64, String> = HashMap::new();
     for p in &snapshot.personnel {
         noms_par_id.insert(p.id, p.nom_complet());
@@ -61,15 +61,15 @@ pub fn exporter_tout(
     }
     for (i, p) in snapshot.personnel.iter().enumerate() {
         let r = (i + 1) as u32;
-        ws.write(r, 0, p.matricule.as_deref().unwrap_or("")).ok();
-        ws.write(r, 1, &p.nom).ok();
-        ws.write(r, 2, &p.prenom).ok();
-        ws.write(r, 3, p.telephone.as_deref().unwrap_or("")).ok();
-        ws.write(r, 4, p.adresse.as_deref().unwrap_or("")).ok();
-        ws.write(r, 5, p.email.as_deref().unwrap_or("")).ok();
-        ws.write(r, 6, p.statut.as_deref().unwrap_or("")).ok();
-        ws.write(r, 7, p.grade.as_deref().unwrap_or("")).ok();
-        ws.write(r, 8, p.situation_familiale.as_deref().unwrap_or("")).ok();
+        ws.write(r, 0, p.matricule.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
+        ws.write(r, 1, &p.nom).map_err(|e| e.to_string())?;
+        ws.write(r, 2, &p.prenom).map_err(|e| e.to_string())?;
+        ws.write(r, 3, p.telephone.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
+        ws.write(r, 4, p.adresse.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
+        ws.write(r, 5, p.email.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
+        ws.write(r, 6, p.statut.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
+        ws.write(r, 7, p.grade.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
+        ws.write(r, 8, p.situation_familiale.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
         ws.write(
             r,
             9,
@@ -77,7 +77,7 @@ pub fn exporter_tout(
                 .map(|d| d.format("%d/%m/%Y").to_string())
                 .unwrap_or_default(),
         )
-        .ok();
+        .map_err(|e| e.to_string())?;
     }
     ws.autofit();
 
@@ -93,9 +93,8 @@ pub fn exporter_tout(
     }
     for (i, pt) in snapshot.pointages.iter().enumerate() {
         let r = (i + 1) as u32;
-        let (n, p) = split_nom(pt);
-        let cle = format!("{} {}", n, p).trim().to_string();
-        let matricule = matricules.get(&cle).cloned().unwrap_or_default();
+        let (n, p) = identites_par_id.get(&pt.personnel_id).cloned().unwrap_or_default();
+        let matricule = matricules_par_id.get(&pt.personnel_id).cloned().unwrap_or_default();
         let date_key = pt.date_pointage.format("%Y-%m-%d").to_string();
         let statut = match snapshot.feries.get(&date_key) {
             Some(periodes) => {
@@ -118,17 +117,17 @@ pub fn exporter_tout(
             None => String::new(),
         };
 
-        ws.write(r, 0, matricule).ok();
-        ws.write(r, 1, n).ok();
-        ws.write(r, 2, p).ok();
-        ws.write(r, 3, pt.date_pointage.format("%d/%m/%Y").to_string()).ok();
-        ws.write(r, 4, statut).ok();
-        ws.write(r, 5, fmt_h(pt.matin_arrivee)).ok();
-        ws.write(r, 6, fmt_h(pt.matin_sortie)).ok();
-        ws.write(r, 7, fmt_h(pt.apres_midi_arrivee)).ok();
-        ws.write(r, 8, fmt_h(pt.apres_midi_sortie)).ok();
-        ws.write(r, 9, total_jour(pt)).ok();
-        ws.write(r, 10, pt.observation.as_deref().unwrap_or("")).ok();
+        ws.write(r, 0, matricule).map_err(|e| e.to_string())?;
+        ws.write(r, 1, n).map_err(|e| e.to_string())?;
+        ws.write(r, 2, p).map_err(|e| e.to_string())?;
+        ws.write(r, 3, pt.date_pointage.format("%d/%m/%Y").to_string()).map_err(|e| e.to_string())?;
+        ws.write(r, 4, statut).map_err(|e| e.to_string())?;
+        ws.write(r, 5, fmt_h(pt.matin_arrivee)).map_err(|e| e.to_string())?;
+        ws.write(r, 6, fmt_h(pt.matin_sortie)).map_err(|e| e.to_string())?;
+        ws.write(r, 7, fmt_h(pt.apres_midi_arrivee)).map_err(|e| e.to_string())?;
+        ws.write(r, 8, fmt_h(pt.apres_midi_sortie)).map_err(|e| e.to_string())?;
+        ws.write(r, 9, total_jour(pt)).map_err(|e| e.to_string())?;
+        ws.write(r, 10, pt.observation.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
     }
     ws.autofit();
 
@@ -144,12 +143,12 @@ pub fn exporter_tout(
     }
     for (i, b) in snapshot.bilan.iter().enumerate() {
         let r = (i + 1) as u32;
-        ws.write(r, 0, &b.nom).ok();
-        ws.write(r, 1, b.jours_presents).ok();
-        ws.write(r, 2, b.matins_presents).ok();
-        ws.write(r, 3, b.apres_midis_presents).ok();
-        ws.write(r, 4, &b.total_heures).ok();
-        ws.write(r, 5, &b.moyenne_arrivee).ok();
+        ws.write(r, 0, &b.nom).map_err(|e| e.to_string())?;
+        ws.write(r, 1, b.jours_presents).map_err(|e| e.to_string())?;
+        ws.write(r, 2, b.matins_presents).map_err(|e| e.to_string())?;
+        ws.write(r, 3, b.apres_midis_presents).map_err(|e| e.to_string())?;
+        ws.write(r, 4, &b.total_heures).map_err(|e| e.to_string())?;
+        ws.write(r, 5, &b.moyenne_arrivee).map_err(|e| e.to_string())?;
     }
     ws.autofit();
 
@@ -160,12 +159,12 @@ pub fn exporter_tout(
         ws.write_with_format(0, i as u16, *h, &entete)
             .map_err(|e| e.to_string())?;
     }
-    let classement = db.get_classement_periode(debut, fin).unwrap_or_default();
+    let classement = db.get_classement_periode(debut, fin)?;
     for (i, c) in classement.iter().enumerate() {
         let r = (i + 1) as u32;
-        ws.write(r, 0, &c.0).ok();
-        ws.write(r, 1, (c.1 * 10.0).round() / 10.0).ok();
-        ws.write(r, 2, c.2 as u32).ok();
+        ws.write(r, 0, &c.0).map_err(|e| e.to_string())?;
+        ws.write(r, 1, (c.1 * 10.0).round() / 10.0).map_err(|e| e.to_string())?;
+        ws.write(r, 2, c.2 as u32).map_err(|e| e.to_string())?;
     }
     ws.autofit();
 
@@ -185,36 +184,28 @@ pub fn exporter_tout(
             "aprem" => "Après-midi",
             _ => "Jour entier",
         };
-        ws.write(r, 0, nom).ok();
-        ws.write(r, 1, c.date_debut.format("%d/%m/%Y").to_string()).ok();
-        ws.write(r, 2, c.date_fin.format("%d/%m/%Y").to_string()).ok();
-        ws.write(r, 3, libelle_periode).ok();
-        ws.write(r, 4, duree as u32).ok();
+        ws.write(r, 0, nom).map_err(|e| e.to_string())?;
+        ws.write(r, 1, c.date_debut.format("%d/%m/%Y").to_string()).map_err(|e| e.to_string())?;
+        ws.write(r, 2, c.date_fin.format("%d/%m/%Y").to_string()).map_err(|e| e.to_string())?;
+        ws.write(r, 3, libelle_periode).map_err(|e| e.to_string())?;
+        ws.write(r, 4, duree as u32).map_err(|e| e.to_string())?;
     }
     ws.autofit();
 
     let ws = wb.add_worksheet();
     ws.set_name("Période").map_err(|e| e.to_string())?;
-    ws.write(0, 0, "Service").ok();
-    ws.write(0, 1, &snapshot.nom_entreprise).ok();
-    ws.write(1, 0, "Du").ok();
-    ws.write(1, 1, debut.format("%d/%m/%Y").to_string()).ok();
-    ws.write(2, 0, "Au").ok();
-    ws.write(2, 1, fin.format("%d/%m/%Y").to_string()).ok();
-    ws.write(3, 0, "Exporté le").ok();
-    ws.write(3, 1, chrono::Local::now().format("%d/%m/%Y %H:%M").to_string()).ok();
+    ws.write(0, 0, "Service").map_err(|e| e.to_string())?;
+    ws.write(0, 1, &snapshot.nom_entreprise).map_err(|e| e.to_string())?;
+    ws.write(1, 0, "Du").map_err(|e| e.to_string())?;
+    ws.write(1, 1, debut.format("%d/%m/%Y").to_string()).map_err(|e| e.to_string())?;
+    ws.write(2, 0, "Au").map_err(|e| e.to_string())?;
+    ws.write(2, 1, fin.format("%d/%m/%Y").to_string()).map_err(|e| e.to_string())?;
+    ws.write(3, 0, "Exporté le").map_err(|e| e.to_string())?;
+    ws.write(3, 1, chrono::Local::now().format("%d/%m/%Y %H:%M").to_string()).map_err(|e| e.to_string())?;
     ws.autofit();
 
     wb.save(&chemin).map_err(|e| e.to_string())?;
     Ok(chemin.to_string_lossy().to_string())
-}
-
-fn split_nom(pt: &EnregistrementPointage) -> (String, String) {
-    let nom = pt.nom_complet.clone().unwrap_or_default();
-    let mut it = nom.splitn(2, ' ');
-    let n = it.next().unwrap_or("").to_string();
-    let p = it.next().unwrap_or("").to_string();
-    (n, p)
 }
 
 fn fmt_h(t: Option<chrono::NaiveTime>) -> String {
@@ -224,10 +215,10 @@ fn fmt_h(t: Option<chrono::NaiveTime>) -> String {
 fn total_jour(pt: &EnregistrementPointage) -> String {
     let mut secs: i64 = 0;
     if let (Some(a), Some(s)) = (pt.matin_arrivee, pt.matin_sortie) {
-        secs += (s - a).num_seconds();
+        if s >= a { secs += (s - a).num_seconds(); }
     }
     if let (Some(a), Some(s)) = (pt.apres_midi_arrivee, pt.apres_midi_sortie) {
-        secs += (s - a).num_seconds();
+        if s >= a { secs += (s - a).num_seconds(); }
     }
     if secs <= 0 {
         "".into()
@@ -235,3 +226,4 @@ fn total_jour(pt: &EnregistrementPointage) -> String {
         format!("{}h{:02}", secs / 3600, (secs % 3600) / 60)
     }
 }
+

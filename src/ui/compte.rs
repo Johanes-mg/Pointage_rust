@@ -1,3 +1,4 @@
+
 use crate::database::Database;
 use crate::models::Utilisateur;
 use crate::theme;
@@ -99,10 +100,6 @@ pub fn afficher(
         }
     }
 
-    if !state.message_profil.is_empty() {
-        ui.add_space(10.0);
-        theme::message_inline(ui, &state.message_profil, state.message_profil_ok);
-    }
 
     ui.add_space(28.0);
 
@@ -187,10 +184,6 @@ pub fn afficher(
         valider_mdp(db, utilisateur, state);
     }
 
-    if !state.message_mdp.is_empty() {
-        ui.add_space(10.0);
-        theme::message_inline(ui, &state.message_mdp, state.message_mdp_ok);
-    }
 
     ui.add_space(28.0);
 
@@ -217,8 +210,7 @@ pub fn afficher(
                 .set_title("Exporter la base de donnees")
                 .add_filter("Base SQLite", &["db"])
                 .set_file_name(format!(
-                    "pointage_{}_{}.db",
-                    utilisateur.nom_utilisateur,
+                    "pointage_sauvegarde_{}.db",
                     chrono::Local::now().format("%Y-%m-%d")
                 ))
                 .save_file()
@@ -257,19 +249,14 @@ pub fn afficher(
         }
     });
 
-    if !state.message_bdd.is_empty() {
-        ui.add_space(10.0);
-        theme::message_inline(ui, &state.message_bdd, state.message_bdd_ok);
-    }
 
     ui.add_space(12.0);
     ui.label(
         egui::RichText::new(
-            "Attention : l'import remplace TOUTES les données actuelles de Personnel, Pointage, Fériés et Paramètres. Votre compte actuel n'est pas modifié.",
+            "L'import fusionne les données de travail sans remplacer votre base : les employés, pointages, congés, jours fériés et paramètres manquants sont ajoutés. Les doublons sont conservés une seule fois. Votre compte et vos identifiants restent privés et ne sont jamais importés.",
         )
         .size(11.5)
-        .color(theme::DANGER)
-        .strong(),
+        .color(theme::TEXTE_SECONDAIRE),
     );
 }
 

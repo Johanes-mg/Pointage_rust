@@ -650,8 +650,19 @@ impl Database {
 
     pub fn supprimer_personnel(&self, id: i64) -> Result<(), String> {
         self.with_conn(|conn| {
-            conn.execute("DELETE FROM Personnel WHERE Id = ?1", params![id])
+            let historiques: i64 = conn.query_row(
+                "SELECT (SELECT COUNT(*) FROM EnregistrementPointage WHERE PersonnelId=?1) + (SELECT COUNT(*) FROM Conge WHERE PersonnelId=?1)",
+                params![id],
+                |r| r.get(0),
+            ).map_err(|e| e.to_string())?;
+            if historiques > 0 {
+                return Err("Suppression refusée : cet employé possède des pointages ou des congés historiques. Modifiez plutôt son statut pour le conserver dans les bilans.".into());
+            }
+            let lignes = conn.execute("DELETE FROM Personnel WHERE Id = ?1", params![id])
                 .map_err(|e| e.to_string())?;
+            if lignes == 0 {
+                return Err("Employé introuvable.".into());
+            }
             Ok(())
         })
     }
@@ -746,6 +757,12 @@ impl Database {
         aprem_sortie: Option<NaiveTime>,
         observation: Option<String>,
     ) -> Result<(), String> {
+        if let (Some(arrivee), Some(sortie)) = (matin_arrivee, matin_sortie) {
+            if sortie < arrivee { return Err("La sortie du matin doit être postérieure ou égale à l'arrivée.".into()); }
+        }
+        if let (Some(arrivee), Some(sortie)) = (aprem_arrivee, aprem_sortie) {
+            if sortie < arrivee { return Err("La sortie de l'après-midi doit être postérieure ou égale à l'arrivée.".into()); }
+        }
         self.with_conn(|conn| {
             let fmt = |t: Option<NaiveTime>| t.map(|x| x.format("%H:%M:%S").to_string());
             conn.execute(
@@ -1500,15 +1517,56 @@ impl Database {
 
     pub fn exporter_base(&self, destination: &str) -> Result<(), String> {
         let dest_path = PathBuf::from(destination);
-        if dest_path.exists() {
-            std::fs::remove_file(&dest_path).map_err(|e| e.to_string())?;
+        if let Some(parent) = dest_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
         }
+        if let (Some(actif), Ok(dest_canon)) = (self.chemin_actif.borrow().clone(), std::fs::canonicalize(&dest_path)) {
+            if let Ok(actif_canon) = std::fs::canonicalize(actif) {
+                if actif_canon == dest_canon {
+                    return Err("Choisissez un autre fichier : l'export ne peut pas écraser la base actuellement ouverte.".into());
+                }
+            }
+        }
+        let suffixe = chrono::Local::now().format("%Y%m%d_%H%M%S_%f").to_string();
+        let nom = dest_path.file_name().and_then(|n| n.to_str()).unwrap_or("pointage.db").to_string();
+        let mut temp_path = dest_path.clone();
+        temp_path.set_file_name(format!(".{}.{}.{}.tmp.db", nom, std::process::id(), suffixe));
+        let temp_str = temp_path.to_string_lossy().replace('\'', "''");
         self.with_conn(|conn| {
-            let esc = destination.replace('\'', "''");
-            conn.execute_batch(&format!("VACUUM INTO '{}';", esc))
-                .map_err(|e| e.to_string())?;
+            conn.execute_batch(&format!("VACUUM INTO '{}';", temp_str))
+                .map_err(|e| format!("Création de la copie impossible : {}", e))?;
             Ok(())
-        })
+        })?;
+        let nettoyage = (|| -> Result<(), String> {
+            let copie = Connection::open(&temp_path).map_err(|e| e.to_string())?;
+            copie.execute_batch("DROP TABLE IF EXISTS Utilisateur;")
+                .map_err(|e| format!("Impossible d'exclure les comptes de la sauvegarde : {}", e))?;
+            let integrite: String = copie.query_row("PRAGMA integrity_check", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+            if integrite.to_lowercase() != "ok" {
+                return Err(format!("La vérification d'intégrité de la sauvegarde a échoué : {}", integrite));
+            }
+            copie.execute("DELETE FROM sqlite_sequence WHERE name = 'Utilisateur'", []).map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+        if let Err(e) = nettoyage {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(e);
+        }
+        let ancien = if dest_path.exists() {
+            let mut backup = dest_path.clone();
+            backup.set_file_name(format!("{}.{}.previous", nom, suffixe));
+            std::fs::rename(&dest_path, &backup).map_err(|e| format!("Impossible de protéger l'ancien export : {}", e))?;
+            Some(backup)
+        } else { None };
+        if let Err(e) = std::fs::rename(&temp_path, &dest_path) {
+            if let Some(ref backup) = ancien { let _ = std::fs::rename(backup, &dest_path); }
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(format!("Impossible de finaliser l'export : {}", e));
+        }
+        if let Some(backup) = ancien { let _ = std::fs::remove_file(backup); }
+        Ok(())
     }
 
     fn sauvegarde_avant_import(&self) -> Result<PathBuf, String> {
@@ -1527,13 +1585,9 @@ impl Database {
             .unwrap_or("base")
             .to_string();
 
-        let horodatage = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-        let nom_backup = format!("{}_{}.db", nom_fichier, horodatage);
+        let horodatage = chrono::Local::now().format("%Y%m%d_%H%M%S_%f").to_string();
+        let nom_backup = format!("{}_{}_{}.db", nom_fichier, horodatage, std::process::id());
         let chemin_backup = dossier_backups.join(nom_backup);
-
-        if chemin_backup.exists() {
-            std::fs::remove_file(&chemin_backup).map_err(|e| e.to_string())?;
-        }
 
         let dest_str = chemin_backup.to_string_lossy().to_string();
         let esc = dest_str.replace('\'', "''");
@@ -1542,6 +1596,12 @@ impl Database {
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
+        let copie = Connection::open(&chemin_backup).map_err(|e| e.to_string())?;
+        copie.execute_batch("DROP TABLE IF EXISTS Utilisateur;")
+            .map_err(|e| format!("Impossible d'exclure les comptes de la sauvegarde locale : {}", e))?;
+        copie.execute("DELETE FROM sqlite_sequence WHERE name = 'Utilisateur'", [])
+            .map_err(|e| e.to_string())?;
+        drop(copie);
 
         Ok(chemin_backup)
     }
@@ -1577,6 +1637,13 @@ impl Database {
                 e
             )
         })?;
+
+        let integrite_source: String = verif
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .map_err(|e| format!("Vérification de la base source impossible : {}", e))?;
+        if integrite_source.to_lowercase() != "ok" {
+            return Err(format!("La base source est endommagée : {}", integrite_source));
+        }
 
         let tables_ok: i64 = verif
             .query_row(
@@ -1828,13 +1895,21 @@ impl Database {
                 {
                     let mut stmt = conn
                         .prepare(
-                            "INSERT OR IGNORE INTO Personnel
+                            "INSERT INTO Personnel
                              (Id, Nom, Prenom, Matricule, Telephone, Adresse, Email, Statut, Grade, SituationFamiliale, DateArrivee)
                              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                         )
                         .map_err(|e| e.to_string())?;
                     for p in &personnel {
                         if ids_personnel_locaux.contains(&p.0) {
+                            let identique: i64 = conn.query_row(
+                                "SELECT COUNT(*) FROM Personnel WHERE Id=?1 AND Nom=?2 AND Prenom=?3 AND Matricule IS ?4 AND Telephone IS ?5 AND Adresse IS ?6 AND Email IS ?7 AND Statut IS ?8 AND Grade IS ?9 AND SituationFamiliale IS ?10 AND DateArrivee IS ?11",
+                                params![p.0, p.1, p.2, p.3, p.4, p.5, p.6, p.7, p.8, p.9, p.10],
+                                |r| r.get(0),
+                            ).map_err(|e| e.to_string())?;
+                            if identique == 0 {
+                                return Err(format!("Conflit sur l'identifiant employé {} : les deux bases associent cet identifiant à des informations différentes. Aucune donnée n'a été importée.", p.0));
+                            }
                             continue;
                         }
                         stmt.execute(params![
@@ -1848,7 +1923,7 @@ impl Database {
                 {
                     let mut stmt = conn
                         .prepare(
-                            "INSERT OR IGNORE INTO EnregistrementPointage
+                            "INSERT INTO EnregistrementPointage
                              (Id, PersonnelId, DatePointage,
                               MatinArrivee, MatinSortie, ApresMidiArrivee, ApresMidiSortie, Observation)
                              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -1860,18 +1935,26 @@ impl Database {
                         }
                         let cle = (pt.1, pt.2.clone());
                         if cles_pointage_locales.contains(&cle) {
+                            let identique: i64 = conn.query_row(
+                                "SELECT COUNT(*) FROM EnregistrementPointage WHERE PersonnelId=?1 AND DatePointage=?2 AND MatinArrivee IS ?3 AND MatinSortie IS ?4 AND ApresMidiArrivee IS ?5 AND ApresMidiSortie IS ?6 AND Observation IS ?7",
+                                params![pt.1, pt.2, pt.3, pt.4, pt.5, pt.6, pt.7],
+                                |r| r.get(0),
+                            ).map_err(|e| e.to_string())?;
+                            if identique == 0 {
+                                return Err(format!("Conflit de pointage pour l'employé {} à la date {} : les deux bases contiennent des horaires différents. Aucune donnée n'a été importée.", pt.1, pt.2));
+                            }
                             continue;
                         }
-                        let _ = stmt.execute(params![
+                        stmt.execute(params![
                             pt.0, pt.1, pt.2, pt.3, pt.4, pt.5, pt.6, pt.7
-                        ]);
+                        ]).map_err(|e| format!("Import du pointage {} impossible : {}", pt.0, e))?;
                     }
                 }
 
                 {
                     let mut stmt = conn
                         .prepare(
-                            "INSERT OR IGNORE INTO JourFerie (Id, DatePointage, Periode) VALUES (?1,?2,?3)",
+                            "INSERT INTO JourFerie (Id, DatePointage, Periode) VALUES (?1,?2,?3)",
                         )
                         .map_err(|e| e.to_string())?;
                     for f in &feries {
@@ -1879,36 +1962,44 @@ impl Database {
                         if cles_ferie_locales.contains(&cle) {
                             continue;
                         }
-                        let _ = stmt.execute(params![f.0, f.1, f.2]);
+                        stmt.execute(params![f.0, f.1, f.2]).map_err(|e| format!("Import du jour férié {} impossible : {}", f.0, e))?;
                     }
                 }
 
                 {
                     let mut stmt = conn
                         .prepare(
-                            "INSERT OR IGNORE INTO Conge (Id, PersonnelId, DateDebut, DateFin, Periode) VALUES (?1,?2,?3,?4,?5)",
+                            "INSERT INTO Conge (Id, PersonnelId, DateDebut, DateFin, Periode) VALUES (?1,?2,?3,?4,?5)",
                         )
                         .map_err(|e| e.to_string())?;
                     for c in &conges {
                         if ids_conge_locaux.contains(&c.0) {
+                            let identique: i64 = conn.query_row(
+                                "SELECT COUNT(*) FROM Conge WHERE Id=?1 AND PersonnelId=?2 AND DateDebut=?3 AND DateFin=?4 AND Periode=?5",
+                                params![c.0, c.1, c.2, c.3, c.4],
+                                |r| r.get(0),
+                            ).map_err(|e| e.to_string())?;
+                            if identique == 0 {
+                                return Err(format!("Conflit sur le congé {} : les deux bases contiennent des informations différentes. Aucune donnée n'a été importée.", c.0));
+                            }
                             continue;
                         }
                         if !ids_personnel_effectifs.contains(&c.1) {
                             continue;
                         }
-                        let _ = stmt.execute(params![c.0, c.1, c.2, c.3, c.4]);
+                        stmt.execute(params![c.0, c.1, c.2, c.3, c.4]).map_err(|e| format!("Import du congé {} impossible : {}", c.0, e))?;
                     }
                 }
 
                 {
                     let mut stmt = conn
-                        .prepare("INSERT OR IGNORE INTO Parametre (Cle, Valeur) VALUES (?1,?2)")
+                        .prepare("INSERT INTO Parametre (Cle, Valeur) VALUES (?1,?2)")
                         .map_err(|e| e.to_string())?;
                     for p in &parametres {
                         if cles_param_locales.contains(&p.0) {
                             continue;
                         }
-                        let _ = stmt.execute(params![p.0, p.1]);
+                        stmt.execute(params![p.0, p.1]).map_err(|e| format!("Import du paramètre {} impossible : {}", p.0, e))?;
                     }
                     conn.execute(
                         "INSERT OR IGNORE INTO Parametre (Cle, Valeur) VALUES ('NomEntreprise','Pointage')",
@@ -1922,29 +2013,25 @@ impl Database {
                         "SELECT COALESCE(MAX(Id), 0) FROM Personnel",
                         [],
                         |r| r.get(0),
-                    )
-                    .unwrap_or(0);
+                    ).map_err(|e| e.to_string())?;
                 let max_pointage: i64 = conn
                     .query_row(
                         "SELECT COALESCE(MAX(Id), 0) FROM EnregistrementPointage",
                         [],
                         |r| r.get(0),
-                    )
-                    .unwrap_or(0);
+                    ).map_err(|e| e.to_string())?;
                 let max_ferie: i64 = conn
                     .query_row(
                         "SELECT COALESCE(MAX(Id), 0) FROM JourFerie",
                         [],
                         |r| r.get(0),
-                    )
-                    .unwrap_or(0);
+                    ).map_err(|e| e.to_string())?;
                 let max_conge: i64 = conn
                     .query_row(
                         "SELECT COALESCE(MAX(Id), 0) FROM Conge",
                         [],
                         |r| r.get(0),
-                    )
-                    .unwrap_or(0);
+                    ).map_err(|e| e.to_string())?;
 
                 for (table, maxid) in [
                     ("Personnel", max_personnel),
@@ -1958,17 +2045,17 @@ impl Database {
                             params![table],
                             |r| r.get(0),
                         )
-                        .unwrap_or(0);
+                        .map_err(|e| e.to_string())?;
                     if exists > 0 {
-                        let _ = conn.execute(
+                        conn.execute(
                             "UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = ?2",
                             params![maxid, table],
-                        );
+                        ).map_err(|e| e.to_string())?;
                     } else {
-                        let _ = conn.execute(
+                        conn.execute(
                             "INSERT INTO sqlite_sequence (name, seq) VALUES (?1, ?2)",
                             params![table, maxid],
-                        );
+                        ).map_err(|e| e.to_string())?;
                     }
                 }
 
@@ -2003,3 +2090,4 @@ fn jours_dans_mois(annee: i32, mois: u32) -> u32 {
         _ => 30,
     }
 }
+

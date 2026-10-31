@@ -1,3 +1,4 @@
+
 use crate::database::Database;
 use crate::models::Personnel;
 use crate::theme;
@@ -340,12 +341,19 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
         if state.selection_id.is_some() {
             if theme::bouton_image_texte(ui, "effacer.png", "Supprimer", largeur_bouton, 42.0) {
                 if let Some(id) = state.selection_id {
-                    let _ = db.supprimer_personnel(id);
-                    state.vider();
-                    state.invalider_cache();
-                    state.message = "Personnel supprimé.".into();
-                    state.message_ok = true;
-                    state.mutation_effectuee = true;
+                    match db.supprimer_personnel(id) {
+                        Ok(()) => {
+                            state.vider();
+                            state.invalider_cache();
+                            state.message = "Personnel supprimé.".into();
+                            state.message_ok = true;
+                            state.mutation_effectuee = true;
+                        }
+                        Err(e) => {
+                            state.message = e;
+                            state.message_ok = false;
+                        }
+                    }
                 }
             }
         } else {
@@ -353,10 +361,6 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
         }
     });
 
-    if !state.message.is_empty() {
-        ui.add_space(12.0);
-        theme::message_inline(ui, &state.message, state.message_ok);
-    }
 }
 
 struct Colonnes {

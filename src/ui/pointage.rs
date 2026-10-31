@@ -7,7 +7,7 @@ use std::collections::HashMap;
 const CASE_LARGEUR: f32 = 46.0;
 const CASE_HAUTEUR: f32 = 46.0;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PointageEnCours {
     pub coche_matin: bool,
     pub matin_arr: Option<NaiveTime>,
@@ -81,6 +81,7 @@ pub struct PointageState {
     pub cache_personnel: Option<Vec<Personnel>>,
     pub cache_date_pointages: Option<NaiveDate>,
     pub pointages_jour: Vec<i64>,
+    pub enregistrements_jour: Vec<i64>,
     pub conges_jour: HashMap<i64, CongeJour>,
     pub cache_mois: Option<(i32, u32)>,
     pub stats_mois: HashMap<u32, i64>,
@@ -88,7 +89,11 @@ pub struct PointageState {
     pub ferie_jour: Option<String>,
     pub cache_ferie_date: Option<NaiveDate>,
     pub brouillons: HashMap<i64, PointageEnCours>,
+    pub pointages_sauvegardes: HashMap<i64, PointageEnCours>,
     pub rafraichir: bool,
+    pub mutation_effectuee: bool,
+    pub message_action: String,
+    pub message_action_ok: bool,
     pub recherche: String,
     pub filtre_jour: FiltreJour,
     pub dialog_conge: CongeDialog,
@@ -103,6 +108,7 @@ impl PointageState {
             cache_personnel: None,
             cache_date_pointages: None,
             pointages_jour: Vec::new(),
+            enregistrements_jour: Vec::new(),
             conges_jour: HashMap::new(),
             cache_mois: None,
             stats_mois: HashMap::new(),
@@ -110,7 +116,11 @@ impl PointageState {
             ferie_jour: None,
             cache_ferie_date: None,
             brouillons: HashMap::new(),
+            pointages_sauvegardes: HashMap::new(),
             rafraichir: true,
+            mutation_effectuee: false,
+            message_action: String::new(),
+            message_action_ok: true,
             recherche: String::new(),
             filtre_jour: FiltreJour::Tous,
             dialog_conge: CongeDialog::default(),
@@ -121,6 +131,7 @@ impl PointageState {
         self.cache_personnel = None;
         self.cache_date_pointages = None;
         self.pointages_jour.clear();
+        self.enregistrements_jour.clear();
         self.conges_jour.clear();
         self.cache_mois = None;
         self.stats_mois.clear();
@@ -128,6 +139,7 @@ impl PointageState {
         self.ferie_jour = None;
         self.cache_ferie_date = None;
         self.brouillons.clear();
+        self.pointages_sauvegardes.clear();
         self.rafraichir = true;
     }
 }
@@ -485,6 +497,8 @@ fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
         .get_pointages_du_jour(state.date_selectionnee)
         .unwrap_or_default();
 
+    state.enregistrements_jour = pointages.iter().map(|p| p.personnel_id).collect();
+
     state.pointages_jour = pointages
         .iter()
         .filter(|pt| {
@@ -520,25 +534,27 @@ fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
     }
 
     state.brouillons.clear();
+    state.pointages_sauvegardes.clear();
     if let Some(personnes) = state.cache_personnel.clone() {
         for p in &personnes {
             if let Some(e) = pointages.iter().find(|pt| pt.personnel_id == p.id) {
                 let matin_ok = e.matin_arrivee.is_some() || e.matin_sortie.is_some();
                 let aprem_ok = e.apres_midi_arrivee.is_some() || e.apres_midi_sortie.is_some();
-                state.brouillons.insert(
-                    p.id,
-                    PointageEnCours {
-                        coche_matin: matin_ok,
-                        matin_arr: e.matin_arrivee,
-                        matin_sort: e.matin_sortie,
-                        coche_aprem: aprem_ok,
-                        aprem_arr: e.apres_midi_arrivee,
-                        aprem_sort: e.apres_midi_sortie,
-                        observation: e.observation.clone().unwrap_or_default(),
-                    },
-                );
+                let pointage = PointageEnCours {
+                    coche_matin: matin_ok,
+                    matin_arr: e.matin_arrivee,
+                    matin_sort: e.matin_sortie,
+                    coche_aprem: aprem_ok,
+                    aprem_arr: e.apres_midi_arrivee,
+                    aprem_sort: e.apres_midi_sortie,
+                    observation: e.observation.clone().unwrap_or_default(),
+                };
+                state.brouillons.insert(p.id, pointage.clone());
+                state.pointages_sauvegardes.insert(p.id, pointage);
             } else {
-                state.brouillons.insert(p.id, PointageEnCours::default());
+                let pointage = PointageEnCours::default();
+                state.brouillons.insert(p.id, pointage.clone());
+                state.pointages_sauvegardes.insert(p.id, pointage);
             }
         }
     }
@@ -1165,8 +1181,8 @@ fn employes_droite(
         return;
     }
 
-    let mut action_supprimer: Option<i64> = None;
-    let mut action_enregistrer: Option<i64> = None;
+    // true = annuler un pointage déjà enregistré ; false = enregistrer les modifications.
+    let mut action_enregistrer: Option<(i64, bool)> = None;
     let mut action_ouvrir_conge: Option<(i64, String)> = None;
 
     let hauteur_liste = (hauteur_panneau - 200.0).max(240.0);
@@ -1269,6 +1285,7 @@ fn employes_droite(
                             return;
                         }
 
+                        let enregistre = state.enregistrements_jour.contains(&p.id);
                         if let Some(b) = state.brouillons.get_mut(&p.id) {
                             let id_matin = format!("matin_{}", p.id);
                             let id_aprem = format!("aprem_{}", p.id);
@@ -1345,147 +1362,65 @@ fn employes_droite(
                             theme::separateur(ui);
                             ui.add_space(10.0);
 
-                            let largeur_totale = ui.available_width();
-                            let largeur_boutons = 44.0 * 2.0 + 10.0 + 16.0;
-                            let largeur_min_obs = 140.0;
-                            let place_pour_ligne_obs_et_boutons =
-                                largeur_totale >= (largeur_min_obs + largeur_boutons);
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Observation")
+                                        .size(11.5)
+                                        .color(theme::TEXTE_SECONDAIRE)
+                                        .strong(),
+                                );
+                                ui.add_space(4.0);
+                                let id_obs = egui::Id::new(format!("obs_{}", p.id));
+                                ui.add_sized(
+                                    [ui.available_width(), 36.0],
+                                    egui::TextEdit::singleline(&mut b.observation)
+                                        .id(id_obs)
+                                        .margin(egui::vec2(10.0, 8.0)),
+                                );
+                                ui.add_space(8.0);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if theme::bouton_image_seule(
+                                            ui,
+                                            "conge.png",
+                                            44.0,
+                                            22.0,
+                                        ) {
+                                            action_ouvrir_conge =
+                                                Some((p.id, p.nom_complet()));
+                                        }
+                                        ui.add_space(10.0);
+                                        let modifie = state
+                                            .pointages_sauvegardes
+                                            .get(&p.id)
+                                            .map(|sauve| sauve != b)
+                                            .unwrap_or(true);
 
-                            if place_pour_ligne_obs_et_boutons {
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.label(
-                                            egui::RichText::new("Observation")
-                                                .size(11.5)
-                                                .color(theme::TEXTE_SECONDAIRE)
-                                                .strong(),
-                                        );
-                                        ui.add_space(4.0);
-                                        let largeur_champ =
-                                            (ui.available_width() - largeur_boutons - 8.0)
-                                                .max(largeur_min_obs);
-                                        let id_obs =
-                                            egui::Id::new(format!("obs_{}", p.id));
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut b.observation)
-                                                .id(id_obs)
-                                                .desired_width(largeur_champ)
-                                                .margin(egui::vec2(10.0, 8.0)),
-                                        );
-                                    });
-
-                                    ui.add_space(8.0);
-
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
+                                        // Le bouton apparaît seulement après une modification.
+                                        // Après sauvegarde, il devient le bouton d'annulation.
+                                        if modifie {
                                             if theme::bouton_image_seule(
                                                 ui,
-                                                "conge.png",
+                                                "enregistrer.png",
                                                 44.0,
                                                 22.0,
                                             ) {
-                                                action_ouvrir_conge =
-                                                    Some((p.id, p.nom_complet()));
+                                                action_enregistrer = Some((p.id, false));
                                             }
-
-                                            ui.add_space(10.0);
-
-                                            let rien_a_sauver = !b.coche_matin
-                                                && !b.coche_aprem
-                                                && b.observation.trim().is_empty();
-                                            let bouton_actif = est_pointe || !rien_a_sauver;
-                                            let img = if est_pointe {
-                                                "non-enregistrer.png"
-                                            } else {
-                                                "enregistrer.png"
-                                            };
-                                            let clic = if bouton_actif {
-                                                theme::bouton_image_seule(
-                                                    ui,
-                                                    img,
-                                                    44.0,
-                                                    22.0,
-                                                )
-                                            } else {
-                                                bouton_image_seule_desactive(
-                                                    ui, img, 44.0, 22.0,
-                                                );
-                                                false
-                                            };
-                                            if clic {
-                                                if est_pointe {
-                                                    action_supprimer = Some(p.id);
-                                                } else {
-                                                    action_enregistrer = Some(p.id);
-                                                }
+                                        } else if enregistre {
+                                            if theme::bouton_image_seule(
+                                                ui,
+                                                "non-enregistrer.png",
+                                                44.0,
+                                                22.0,
+                                            ) {
+                                                action_enregistrer = Some((p.id, true));
                                             }
-                                        },
-                                    );
-                                });
-                            } else {
-                                ui.vertical(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("Observation")
-                                            .size(11.5)
-                                            .color(theme::TEXTE_SECONDAIRE)
-                                            .strong(),
-                                    );
-                                    ui.add_space(4.0);
-                                    let id_obs = egui::Id::new(format!("obs_{}", p.id));
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut b.observation)
-                                            .id(id_obs)
-                                            .desired_width(ui.available_width())
-                                            .margin(egui::vec2(10.0, 8.0)),
-                                    );
-                                    ui.add_space(8.0);
-                                    ui.horizontal(|ui| {
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                if theme::bouton_image_seule(
-                                                    ui,
-                                                    "conge.png",
-                                                    44.0,
-                                                    22.0,
-                                                ) {
-                                                    action_ouvrir_conge =
-                                                        Some((p.id, p.nom_complet()));
-                                                }
-                                                ui.add_space(10.0);
-                                                let rien_a_sauver = !b.coche_matin
-                                                    && !b.coche_aprem
-                                                    && b.observation.trim().is_empty();
-                                                let bouton_actif =
-                                                    est_pointe || !rien_a_sauver;
-                                                let img = if est_pointe {
-                                                    "non-enregistrer.png"
-                                                } else {
-                                                    "enregistrer.png"
-                                                };
-                                                let clic = if bouton_actif {
-                                                    theme::bouton_image_seule(
-                                                        ui, img, 44.0, 22.0,
-                                                    )
-                                                } else {
-                                                    bouton_image_seule_desactive(
-                                                        ui, img, 44.0, 22.0,
-                                                    );
-                                                    false
-                                                };
-                                                if clic {
-                                                    if est_pointe {
-                                                        action_supprimer = Some(p.id);
-                                                    } else {
-                                                        action_enregistrer = Some(p.id);
-                                                    }
-                                                }
-                                            },
-                                        );
-                                    });
-                                });
-                            }
+                                        }
+                                    },
+                                );
+                            });
                         }
                     });
 
@@ -1504,17 +1439,28 @@ fn employes_droite(
         state.dialog_conge = dialog;
     }
 
-    if let Some(id) = action_supprimer {
-        let _ = db.supprimer_pointage(id, state.date_selectionnee);
-        state.pointages_jour.retain(|x| *x != id);
-        state.cache_mois = None;
-        state.cache_date_pointages = None;
-        state.brouillons.remove(&id);
-        state.rafraichir = true;
-    }
-
-    if let Some(id) = action_enregistrer {
-        if let Some(b) = state.brouillons.get(&id).cloned() {
+    if let Some((id, annuler)) = action_enregistrer {
+        if annuler {
+            match db.supprimer_pointage(id, state.date_selectionnee) {
+                Ok(()) => {
+                    let vide = PointageEnCours::default();
+                    state.brouillons.insert(id, vide.clone());
+                    state.pointages_sauvegardes.insert(id, vide);
+                    state.enregistrements_jour.retain(|x| *x != id);
+                    state.pointages_jour.retain(|x| *x != id);
+                    state.message_action = "Pointage annulé.".into();
+                    state.message_action_ok = true;
+                    state.cache_mois = None;
+                    state.cache_date_pointages = Some(state.date_selectionnee);
+                    state.rafraichir = false;
+                    state.mutation_effectuee = true;
+                }
+                Err(e) => {
+                    state.message_action = format!("Échec de l'annulation : {}", e);
+                    state.message_action_ok = false;
+                }
+            }
+        } else if let Some(b) = state.brouillons.get(&id).cloned() {
             let ferie_matin = ferie_bloque_periode(ferie_jour.as_deref(), true);
             let ferie_aprem = ferie_bloque_periode(ferie_jour.as_deref(), false);
             let cj = state.conges_jour.get(&id).cloned();
@@ -1553,19 +1499,48 @@ fn employes_droite(
             let vide =
                 ma.is_none() && ms.is_none() && aa.is_none() && as_.is_none() && obs.is_none();
 
-            if vide {
-                let _ = db.supprimer_pointage(id, state.date_selectionnee);
-                state.pointages_jour.retain(|x| *x != id);
+            let resultat = if vide {
+                db.supprimer_pointage(id, state.date_selectionnee)
             } else {
-                let _ = db.enregistrer_pointage(id, state.date_selectionnee, ma, ms, aa, as_, obs);
-                if !state.pointages_jour.contains(&id) {
-                    state.pointages_jour.push(id);
+                db.enregistrer_pointage(id, state.date_selectionnee, ma, ms, aa, as_, obs)
+            };
+
+            match resultat {
+                Ok(()) => {
+                    state.message_action = if vide {
+                        "Pointage supprimé.".into()
+                    } else {
+                        "Pointage enregistré.".into()
+                    };
+                    state.message_action_ok = true;
+                    state.pointages_sauvegardes.insert(id, b.clone());
+                if vide {
+                    state.enregistrements_jour.retain(|x| *x != id);
+                    state.pointages_jour.retain(|x| *x != id);
+                } else {
+                    if !state.enregistrements_jour.contains(&id) {
+                        state.enregistrements_jour.push(id);
+                    }
+                    let est_present = ma.is_some() || ms.is_some() || aa.is_some() || as_.is_some();
+                    if est_present {
+                        if !state.pointages_jour.contains(&id) {
+                            state.pointages_jour.push(id);
+                        }
+                    } else {
+                        state.pointages_jour.retain(|x| *x != id);
+                    }
+                }
+
+                state.cache_mois = None;
+                state.cache_date_pointages = Some(state.date_selectionnee);
+                state.rafraichir = false;
+                state.mutation_effectuee = true;
+                }
+                Err(e) => {
+                    state.message_action = format!("Échec de l'enregistrement : {}", e);
+                    state.message_action_ok = false;
                 }
             }
-            state.cache_mois = None;
-            state.cache_date_pointages = None;
-            state.brouillons.remove(&id);
-            state.rafraichir = true;
         }
     }
 }
@@ -1616,31 +1591,6 @@ fn bouton_filtre(
     ui.add(bouton).clicked()
 }
 
-fn bouton_image_seule_desactive(
-    ui: &mut egui::Ui,
-    fichier_image: &str,
-    taille: f32,
-    taille_icone: f32,
-) {
-    let ctx = ui.ctx().clone();
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(taille, taille), egui::Sense::hover());
-
-    let painter = ui.painter();
-    painter.rect_filled(rect, theme::r_md(), theme::FOND);
-    painter.rect_stroke(rect, theme::r_md(), egui::Stroke::new(1.0_f32, theme::BORDURE));
-
-    if let Some(tex) = theme::image(&ctx, fichier_image) {
-        let img_rect =
-            egui::Rect::from_center_size(rect.center(), egui::vec2(taille_icone, taille_icone));
-        painter.image(
-            tex.id(),
-            img_rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::from_white_alpha(80),
-        );
-    }
-}
-
 fn bloc_plage(
     ui: &mut egui::Ui,
     id_unique: &str,
@@ -1673,8 +1623,6 @@ fn bloc_plage(
                 if bloque {
                     if *coche {
                         *coche = false;
-                        *arrivee = None;
-                        *sortie = None;
                     }
 
                     ui.horizontal_wrapped(|ui| {
@@ -1717,7 +1665,10 @@ fn bloc_plage(
                             .strong(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.checkbox(coche, "Pointer");
+                        let reponse = ui.selectable_label(*coche, "Pointer");
+                        if reponse.clicked() {
+                            *coche = !*coche;
+                        }
                     });
                 });
 
@@ -1730,11 +1681,6 @@ fn bloc_plage(
                     if sortie.is_none() {
                         *sortie = NaiveTime::from_hms_opt(h_defaut_sort, 0, 0);
                     }
-                }
-
-                if !coche_apres && coche_avant {
-                    *arrivee = None;
-                    *sortie = None;
                 }
 
                 ui.add_space(8.0);
@@ -1846,3 +1792,4 @@ fn jours_dans_mois(annee: i32, mois: u32) -> u32 {
         _ => 30,
     }
 }
+

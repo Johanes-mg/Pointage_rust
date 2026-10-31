@@ -1,17 +1,15 @@
+
 use crate::database::Database;
 use crate::excel_export;
 use crate::theme;
 use chrono::{Datelike, Local, NaiveDate};
-use std::time::{Duration, Instant};
-
-const DUREE_MESSAGE: Duration = Duration::from_secs(8);
+use std::time::Duration;
 const CASE_LARGEUR: f32 = 46.0;
 const CASE_HAUTEUR: f32 = 46.0;
 
 pub struct AccueilState {
     pub message: String,
     pub message_ok: bool,
-    pub message_expire: Option<Instant>,
     pub mois_affiche: NaiveDate,
     pub date_debut: Option<NaiveDate>,
     pub date_fin: Option<NaiveDate>,
@@ -23,7 +21,6 @@ impl AccueilState {
         Self {
             message: String::new(),
             message_ok: true,
-            message_expire: None,
             mois_affiche: NaiveDate::from_ymd_opt(t.year(), t.month(), 1).unwrap(),
             date_debut: None,
             date_fin: None,
@@ -33,30 +30,10 @@ impl AccueilState {
     fn afficher_message(&mut self, texte: String, ok: bool) {
         self.message = texte;
         self.message_ok = ok;
-        self.message_expire = Some(Instant::now() + DUREE_MESSAGE);
-    }
-
-    fn message_visible(&self) -> bool {
-        if let Some(exp) = self.message_expire {
-            Instant::now() < exp
-        } else {
-            false
-        }
-    }
-
-    fn purger_message_si_expire(&mut self) {
-        if let Some(exp) = self.message_expire {
-            if Instant::now() >= exp {
-                self.message.clear();
-                self.message_expire = None;
-            }
-        }
     }
 }
 
 pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
-    state.purger_message_si_expire();
-
     let dispo = ui.available_width();
     let ecart = 16.0_f32;
     let seuil = 720.0_f32;
@@ -300,10 +277,6 @@ fn panneau_droit(ui: &mut egui::Ui, db: &Database, state: &mut AccueilState) {
 
         section_export_plage(ui, db, state);
 
-        if state.message_visible() && !state.message.is_empty() {
-            ui.add_space(20.0);
-            section_message(ui, &state.message, state.message_ok);
-        }
     });
 }
 
@@ -433,23 +406,6 @@ fn section_export_plage(ui: &mut egui::Ui, db: &Database, state: &mut AccueilSta
             }
         }
     }
-}
-
-fn section_message(ui: &mut egui::Ui, texte: &str, ok: bool) {
-    let (fond, couleur) = if ok {
-        (egui::Color32::from_rgb(209, 250, 229), theme::SUCCES)
-    } else {
-        (egui::Color32::from_rgb(254, 226, 226), theme::DANGER)
-    };
-
-    egui::Frame::none()
-        .fill(fond)
-        .rounding(theme::r_sm())
-        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(texte).size(12.5).color(couleur));
-        });
 }
 
 fn sous_titre(ui: &mut egui::Ui, texte: &str) {
