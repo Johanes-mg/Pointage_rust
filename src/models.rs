@@ -53,7 +53,7 @@ pub struct BilanPersonnel {
     pub jours_presents: i64,
     pub matins_presents: i64,
     pub apres_midis_presents: i64,
-    pub total_heures: String,
+    pub total_heures: f64,
     pub moyenne_arrivee: String,
 }
 

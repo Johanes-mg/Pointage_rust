@@ -70,6 +70,8 @@ pub struct BilanState {
     pub cache_conges: Vec<Conge>,
     pub cache_classement: Option<Vec<ClassementEntry>>,
     pub recherche: String,
+    pub message: String,
+    pub message_ok: bool,
 }
 
 impl BilanState {
@@ -88,6 +90,8 @@ impl BilanState {
             cache_conges: Vec::new(),
             cache_classement: None,
             recherche: String::new(),
+            message: String::new(),
+            message_ok: true,
         }
     }
 
@@ -124,7 +128,23 @@ pub fn afficher(ui: &mut egui::Ui, db: &Database, state: &mut BilanState) {
     ui.add_space(16.0);
 
     if state.cache_personnel.is_none() {
-        state.cache_personnel = Some(db.get_personnel().unwrap_or_default());
+        match db.get_personnel() {
+            Ok(personnel) => {
+                state.cache_personnel = Some(personnel);
+                if state.message.starts_with("Chargement du personnel impossible :") {
+                    state.message.clear();
+                    state.message_ok = true;
+                }
+            }
+            Err(e) => {
+                state.message = format!("Chargement du personnel impossible : {}", e);
+                state.message_ok = false;
+            }
+        }
+    }
+    if !state.message.is_empty() {
+        theme::message_inline(ui, &state.message, state.message_ok);
+        ui.add_space(8.0);
     }
     let personnel = state.cache_personnel.clone().unwrap_or_default();
 
@@ -334,14 +354,28 @@ fn afficher_classement(
     if state.cache_classement.is_none() {
         let annee = state.mois_affiche.year();
         let mois = state.mois_affiche.month();
-        let feries = db
-            .get_jours_feries_du_mois(annee, mois)
-            .unwrap_or_default();
-        let conges = db.get_conges_du_mois(annee, mois).unwrap_or_default();
-        state.cache_feries = feries.clone();
-        state.cache_conges = conges.clone();
-        state.cache_classement =
-            Some(calculer_classement(db, personnel, annee, mois, &feries, &conges));
+        match (
+            db.get_jours_feries_du_mois(annee, mois),
+            db.get_conges_du_mois(annee, mois),
+        ) {
+            (Ok(feries), Ok(conges)) => {
+                match calculer_classement(db, personnel, annee, mois, &feries, &conges) {
+                    Ok(classement) => {
+                        state.cache_feries = feries;
+                        state.cache_conges = conges;
+                        state.cache_classement = Some(classement);
+                    }
+                    Err(e) => {
+                        state.message = format!("Calcul du classement impossible : {}", e);
+                        state.message_ok = false;
+                    }
+                }
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                state.message = format!("Chargement des congés/jours fériés impossible : {}", e);
+                state.message_ok = false;
+            }
+        }
     }
 
     let classement = state.cache_classement.clone().unwrap_or_default();
@@ -700,13 +734,16 @@ fn note_effective(
     let mut pts_bruts = 0.0;
     let mut pts_max = 0.0;
 
-    if let Some(m) = note_m {
-        pts_bruts += m;
+    // Chaque demi-journée non neutralisée vaut toujours 10 points,
+    // même si aucun horaire n'a été saisi : une période oubliée vaut 0.
+    // Une demi-journée fériée ou en congé est exclue du dénominateur.
+    if !matin_bloque {
         pts_max += 10.0;
+        pts_bruts += note_m.unwrap_or(0.0);
     }
-    if let Some(a) = note_a {
-        pts_bruts += a;
+    if !aprem_bloque {
         pts_max += 10.0;
+        pts_bruts += note_a.unwrap_or(0.0);
     }
 
     if pts_max <= 0.0 {
@@ -727,7 +764,7 @@ fn jours_ouvrables_perso(
     let mut total = 0u32;
     for j in 1..=nb {
         let d = NaiveDate::from_ymd_opt(annee, mois, j).unwrap();
-        if est_week_end(d) {
+        if est_week_end(d) || d > Local::now().date_naive() {
             continue;
         }
         if ferie_jour_entier(feries, j) {
@@ -754,11 +791,13 @@ fn calculer_classement(
     mois: u32,
     feries: &HashMap<u32, Vec<String>>,
     conges: &[Conge],
-) -> Vec<ClassementEntry> {
+) -> Result<Vec<ClassementEntry>, String> {
     let nb = jours_dans_mois(annee, mois);
-    let debut = NaiveDate::from_ymd_opt(annee, mois, 1).unwrap();
-    let fin = NaiveDate::from_ymd_opt(annee, mois, nb).unwrap();
-    let pointages = db.get_pointages_periode(debut, fin).unwrap_or_default();
+    let debut = NaiveDate::from_ymd_opt(annee, mois, 1)
+        .ok_or_else(|| "Mois de classement invalide.".to_string())?;
+    let fin = NaiveDate::from_ymd_opt(annee, mois, nb)
+        .ok_or_else(|| "Mois de classement invalide.".to_string())?;
+    let pointages = db.get_pointages_periode(debut, fin)?;
 
     let mut resultats: Vec<ClassementEntry> = personnel
         .iter()
@@ -767,7 +806,9 @@ fn calculer_classement(
             let mut somme = 0.0_f64;
             let mut compte = 0_usize;
             for pt in pointages.iter().filter(|pt| pt.personnel_id == p.id) {
-                if est_week_end(pt.date_pointage) {
+                if est_week_end(pt.date_pointage)
+                    || pt.date_pointage > Local::now().date_naive()
+                {
                     continue;
                 }
                 if let Some(arrivee) = p.date_arrivee {
@@ -805,7 +846,7 @@ fn calculer_classement(
             .then(b.nb_jours_pointes.cmp(&a.nb_jours_pointes))
             .then(a.nom.cmp(&b.nom))
     });
-    resultats
+    Ok(resultats)
 }
 
 fn afficher_bilan_perso(
@@ -843,21 +884,45 @@ fn afficher_bilan_perso(
         let mois = state.mois_affiche.month();
         let nb = jours_dans_mois(annee, mois);
 
-        let jours_pointes = db
-            .get_jours_pointes_du_mois(p_sel.id, annee, mois)
-            .unwrap_or_default();
+        let debut = match NaiveDate::from_ymd_opt(annee, mois, 1) {
+            Some(d) => d,
+            None => {
+                state.message = "Mois de bilan invalide.".into();
+                state.message_ok = false;
+                return;
+            }
+        };
+        let fin = match NaiveDate::from_ymd_opt(annee, mois, nb) {
+            Some(d) => d,
+            None => {
+                state.message = "Mois de bilan invalide.".into();
+                state.message_ok = false;
+                return;
+            }
+        };
 
-        let pointages = db
-            .get_pointages_periode(
-                NaiveDate::from_ymd_opt(annee, mois, 1).unwrap(),
-                NaiveDate::from_ymd_opt(annee, mois, nb).unwrap(),
-            )
-            .unwrap_or_default();
+        let chargement = (
+            db.get_jours_pointes_du_mois(p_sel.id, annee, mois),
+            db.get_pointages_periode(debut, fin),
+            db.get_jours_feries_du_mois(annee, mois),
+            db.get_conges_du_mois(annee, mois),
+        );
+        let (jours_pointes, pointages, feries, conges) = match chargement {
+            (Ok(jours), Ok(pointages), Ok(feries), Ok(conges)) => {
+                (jours, pointages, feries, conges)
+            }
+            (Err(e), _, _, _)
+            | (_, Err(e), _, _)
+            | (_, _, Err(e), _)
+            | (_, _, _, Err(e)) => {
+                state.message = format!("Chargement du bilan impossible : {}", e);
+                state.message_ok = false;
+                return;
+            }
+        };
 
-        state.cache_feries = db
-            .get_jours_feries_du_mois(annee, mois)
-            .unwrap_or_default();
-        state.cache_conges = db.get_conges_du_mois(annee, mois).unwrap_or_default();
+        state.cache_feries = feries;
+        state.cache_conges = conges;
 
         state.cache_pointages = pointages
             .into_iter()
@@ -1026,7 +1091,7 @@ fn afficher_bilan_perso(
         )
         .unwrap();
 
-        if est_week_end(date) {
+        if est_week_end(date) || date > Local::now().date_naive() {
             continue;
         }
         if let Some(arrivee) = p_sel.date_arrivee {

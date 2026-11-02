@@ -137,7 +137,7 @@ fn chemins_possibles(nom: &str) -> Vec<String> {
 
 pub fn image(ctx: &egui::Context, nom: &str) -> Option<egui::TextureHandle> {
     {
-        let cache = IMAGES.lock().unwrap();
+        let cache = IMAGES.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(map) = cache.as_ref() {
             if let Some(tex) = map.get(nom) {
                 return Some(tex.clone());
@@ -159,7 +159,7 @@ pub fn image(ctx: &egui::Context, nom: &str) -> Option<egui::TextureHandle> {
                 };
                 let texture = ctx.load_texture(nom, color_image, options);
 
-                let mut cache = IMAGES.lock().unwrap();
+                let mut cache = IMAGES.lock().unwrap_or_else(|e| e.into_inner());
                 let map = cache.get_or_insert_with(HashMap::new);
                 map.insert(nom.to_string(), texture.clone());
                 return Some(texture);

@@ -1,10 +1,12 @@
 use crate::models::*;
 use crate::securite;
 use chrono::{Datelike, NaiveDate, NaiveTime, Weekday};
-use rusqlite::{params, Connection};
+use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 
 pub struct Database {
     dossier: PathBuf,
@@ -17,9 +19,33 @@ pub struct ExportSnapshot {
     pub personnel: Vec<Personnel>,
     pub pointages: Vec<EnregistrementPointage>,
     pub bilan: Vec<BilanPersonnel>,
+    pub classement: Vec<(String, f64, usize)>,
     pub feries: HashMap<String, Vec<String>>,
     pub conges: Vec<Conge>,
     pub nom_entreprise: String,
+}
+
+fn convertir_date_sql(valeur: &str, index: usize) -> rusqlite::Result<NaiveDate> {
+    NaiveDate::parse_from_str(valeur, "%Y-%m-%d").map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(e))
+    })
+}
+
+fn convertir_heure_sql(
+    valeur: Option<String>,
+    index: usize,
+) -> rusqlite::Result<Option<NaiveTime>> {
+    match valeur {
+        None => Ok(None),
+        Some(s) => {
+            let heure = NaiveTime::parse_from_str(&s, "%H:%M:%S")
+                .or_else(|_| NaiveTime::parse_from_str(&s, "%H:%M"))
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(e))
+                })?;
+            Ok(Some(heure))
+        }
+    }
 }
 
 pub fn note_matin_arrivee_5(t: NaiveTime) -> f64 {
@@ -102,8 +128,12 @@ impl Database {
             return Ok(resultats);
         }
         let entries = std::fs::read_dir(&self.dossier).map_err(|e| e.to_string())?;
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
             if let Some(nom) = path.file_name().and_then(|s| s.to_str()) {
                 if nom.starts_with("pointage_") && nom.ends_with(".db") {
                     if let Some(stem) = nom
@@ -243,12 +273,13 @@ impl Database {
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
                  WHERE type='index'
+                   AND name='idx_pointage_unique'
                    AND tbl_name='EnregistrementPointage'
-                   AND (sql LIKE '%UNIQUE%' OR sql LIKE '%PersonnelId, DatePointage%' OR sql LIKE '%PersonnelId,DatePointage%')",
+                   AND sql IS NOT NULL",
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
 
         if index_existe == 0 {
             let contrainte_ok: i64 = conn
@@ -260,13 +291,14 @@ impl Database {
                     [],
                     |r| r.get(0),
                 )
-                .unwrap_or(0);
+                .map_err(|e| e.to_string())?;
 
             if contrainte_ok == 0 {
-                let _ = conn.execute_batch(
+                conn.execute_batch(
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_pointage_unique
                      ON EnregistrementPointage(PersonnelId, DatePointage);",
-                );
+                )
+                .map_err(|e| format!("Migration des pointages impossible (doublons éventuels) : {}", e))?;
             }
         }
 
@@ -276,9 +308,9 @@ impl Database {
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
         if ferie_existe == 0 {
-            let _ = conn.execute_batch(
+            conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS JourFerie (
                     Id INTEGER PRIMARY KEY AUTOINCREMENT,
                     DatePointage TEXT NOT NULL,
@@ -286,7 +318,8 @@ impl Database {
                     UNIQUE (DatePointage, Periode)
                 );
                 CREATE INDEX IF NOT EXISTS idx_ferie_date ON JourFerie(DatePointage);",
-            );
+            )
+            .map_err(|e| e.to_string())?;
         }
 
         let date_arrivee_existe: i64 = conn
@@ -295,9 +328,10 @@ impl Database {
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
         if date_arrivee_existe == 0 {
-            let _ = conn.execute_batch("ALTER TABLE Personnel ADD COLUMN DateArrivee TEXT;");
+            conn.execute_batch("ALTER TABLE Personnel ADD COLUMN DateArrivee TEXT;")
+                .map_err(|e| e.to_string())?;
         }
 
         let conge_existe: i64 = conn
@@ -306,9 +340,9 @@ impl Database {
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
         if conge_existe == 0 {
-            let _ = conn.execute_batch(
+            conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS Conge (
                     Id INTEGER PRIMARY KEY AUTOINCREMENT,
                     PersonnelId INTEGER NOT NULL,
@@ -319,7 +353,8 @@ impl Database {
                 );
                 CREATE INDEX IF NOT EXISTS idx_conge_personnel ON Conge(PersonnelId);
                 CREATE INDEX IF NOT EXISTS idx_conge_dates ON Conge(DateDebut, DateFin);",
-            );
+            )
+            .map_err(|e| e.to_string())?;
         } else {
             let periode_existe: i64 = conn
                 .query_row(
@@ -327,11 +362,12 @@ impl Database {
                     [],
                     |r| r.get(0),
                 )
-                .unwrap_or(0);
+                .map_err(|e| e.to_string())?;
             if periode_existe == 0 {
-                let _ = conn.execute_batch(
+                conn.execute_batch(
                     "ALTER TABLE Conge ADD COLUMN Periode TEXT NOT NULL DEFAULT 'jour';",
-                );
+                )
+                .map_err(|e| e.to_string())?;
             }
         }
 
@@ -374,14 +410,16 @@ impl Database {
         }
 
         for (id, nouveau) in a_renommer {
-            let _ = conn.execute(
+            conn.execute(
                 "UPDATE Utilisateur SET NomUtilisateur = ?1 WHERE Id = ?2",
                 params![nouveau, id],
-            );
+            )
+            .map_err(|e| format!("Normalisation du compte impossible : {}", e))?;
         }
 
         for id in a_supprimer {
-            let _ = conn.execute("DELETE FROM Utilisateur WHERE Id = ?1", params![id]);
+            conn.execute("DELETE FROM Utilisateur WHERE Id = ?1", params![id])
+                .map_err(|e| format!("Nettoyage d'un compte invalide impossible : {}", e))?;
         }
 
         Ok(())
@@ -389,26 +427,23 @@ impl Database {
 
     pub fn aucun_utilisateur(&self) -> Result<bool, String> {
         let bases = self.lister_bases()?;
-        if bases.is_empty() {
-            return Ok(true);
-        }
         for base in &bases {
             let chemin = self.dossier.join(format!("pointage_{}.db", base));
-            if let Ok(conn) = Connection::open(&chemin) {
-                let n: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Utilisateur'",
-                        [],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                if n > 0 {
-                    let count: i64 = conn
-                        .query_row("SELECT COUNT(*) FROM Utilisateur", [], |r| r.get(0))
-                        .unwrap_or(0);
-                    if count > 0 {
-                        return Ok(false);
-                    }
+            let conn = Connection::open(&chemin)
+                .map_err(|e| format!("Impossible de vérifier la base {} : {}", chemin.display(), e))?;
+            let table_existe: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Utilisateur'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if table_existe > 0 {
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM Utilisateur", [], |r| r.get(0))
+                    .map_err(|e| format!("Lecture des comptes impossible : {}", e))?;
+                if count > 0 {
+                    return Ok(false);
                 }
             }
         }
@@ -425,8 +460,8 @@ impl Database {
         if nom_utilisateur.is_empty() {
             return Err("Nom d'utilisateur obligatoire.".into());
         }
-        if mot_de_passe.len() < 4 {
-            return Err("Mot de passe trop court.".into());
+        if mot_de_passe.chars().count() < 8 {
+            return Err("Le mot de passe doit contenir au moins 8 caractères.".into());
         }
 
         let nom_normalise = Self::normaliser_utilisateur(nom_utilisateur);
@@ -452,7 +487,7 @@ impl Database {
                 params![nom_normalise],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
 
         if existe > 0 {
             return Err(format!(
@@ -484,8 +519,37 @@ impl Database {
         })
     }
 
+    /// Lance la vérification du mot de passe dans un thread dédié afin de ne
+    /// pas bloquer la boucle d'affichage egui pendant le calcul PBKDF2.
+    pub fn authentifier_en_arriere_plan(
+        &self,
+        nom_utilisateur: String,
+        mot_de_passe: String,
+    ) -> Receiver<Result<Option<Utilisateur>, String>> {
+        let chemin = self.chemin_pour(&nom_utilisateur);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let resultat = Self::authentifier_sur_chemin(
+                &chemin,
+                &nom_utilisateur,
+                &mot_de_passe,
+            );
+            let _ = tx.send(resultat);
+        });
+        rx
+    }
+
     pub fn authentifier(
         &self,
+        nom_utilisateur: &str,
+        mot_de_passe: &str,
+    ) -> Result<Option<Utilisateur>, String> {
+        let chemin = self.chemin_pour(nom_utilisateur);
+        Self::authentifier_sur_chemin(&chemin, nom_utilisateur, mot_de_passe)
+    }
+
+    fn authentifier_sur_chemin(
+        chemin: &Path,
         nom_utilisateur: &str,
         mot_de_passe: &str,
     ) -> Result<Option<Utilisateur>, String> {
@@ -493,24 +557,23 @@ impl Database {
         if nom_normalise.is_empty() {
             return Ok(None);
         }
-        let chemin = self.chemin_pour(nom_utilisateur);
         if !chemin.exists() {
             return Ok(None);
         }
 
-        let conn = Connection::open(&chemin).map_err(|e| e.to_string())?;
+        let conn = Connection::open(chemin).map_err(|e| e.to_string())?;
         let table_existe: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Utilisateur'",
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
         if table_existe == 0 {
             return Ok(None);
         }
 
-        let _ = Self::migrer_utilisateurs(&conn);
+        Self::migrer_utilisateurs(&conn)?;
 
         let row = conn
             .query_row(
@@ -529,10 +592,22 @@ impl Database {
                     })
                 },
             )
-            .ok();
+            .optional()
+            .map_err(|e| format!("Lecture du compte impossible : {}", e))?;
 
-        if let Some(u) = row {
+        if let Some(mut u) = row {
             if securite::verifier_mot_de_passe(mot_de_passe, &u.sel, &u.mot_de_passe_hash) {
+                if securite::est_ancien_hash(&u.mot_de_passe_hash) {
+                    let nouveau_sel = securite::generer_sel();
+                    let nouveau_hash = securite::hacher_mot_de_passe(mot_de_passe, &nouveau_sel);
+                    conn.execute(
+                        "UPDATE Utilisateur SET MotDePasseHash = ?1, Sel = ?2 WHERE Id = ?3",
+                        params![nouveau_hash, nouveau_sel, u.id],
+                    )
+                    .map_err(|e| format!("Mise à niveau de la sécurité du compte impossible : {}", e))?;
+                    u.mot_de_passe_hash = nouveau_hash;
+                    u.sel = nouveau_sel;
+                }
                 return Ok(Some(u));
             }
         }
@@ -545,8 +620,8 @@ impl Database {
         ancien: &str,
         nouveau: &str,
     ) -> Result<bool, String> {
-        if nouveau.len() < 4 {
-            return Err("Le nouveau mot de passe doit contenir au moins 4 caractères.".into());
+        if nouveau.chars().count() < 8 {
+            return Err("Le nouveau mot de passe doit contenir au moins 8 caractères.".into());
         }
         self.with_conn(|conn| {
             let (hash, sel): (String, String) = conn
@@ -596,8 +671,10 @@ impl Database {
         let iter = stmt
             .query_map([], |r| {
                 let date_str: Option<String> = r.get(10)?;
-                let date_arrivee =
-                    date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+                let date_arrivee = match date_str {
+                    Some(s) => Some(convertir_date_sql(&s, 10)?),
+                    None => None,
+                };
                 Ok(Personnel {
                     id: r.get(0)?,
                     nom: r.get(1)?,
@@ -669,23 +746,18 @@ impl Database {
 
     fn lire_pointage(r: &rusqlite::Row) -> rusqlite::Result<EnregistrementPointage> {
         let date_str: String = r.get(2)?;
-        let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
-            .unwrap_or_else(|_| chrono::Local::now().date_naive());
-
-        let parse_time = |opt: Option<String>| -> Option<NaiveTime> {
-            opt.and_then(|s| NaiveTime::parse_from_str(&s, "%H:%M:%S").ok())
-        };
+        let date = convertir_date_sql(&date_str, 2)?;
 
         Ok(EnregistrementPointage {
             id: r.get(0)?,
             personnel_id: r.get(1)?,
             date_pointage: date,
-            matin_arrivee: parse_time(r.get(3)?),
-            matin_sortie: parse_time(r.get(4)?),
-            apres_midi_arrivee: parse_time(r.get(5)?),
-            apres_midi_sortie: parse_time(r.get(6)?),
+            matin_arrivee: convertir_heure_sql(r.get(3)?, 3)?,
+            matin_sortie: convertir_heure_sql(r.get(4)?, 4)?,
+            apres_midi_arrivee: convertir_heure_sql(r.get(5)?, 5)?,
+            apres_midi_sortie: convertir_heure_sql(r.get(6)?, 6)?,
             observation: r.get(7)?,
-            nom_complet: r.get(8).ok(),
+            nom_complet: r.get(8)?,
         })
     }
 
@@ -809,11 +881,13 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT CAST(strftime('%d', DatePointage) AS INTEGER) AS Jour, COUNT(*)
-                     FROM EnregistrementPointage
-                     WHERE strftime('%Y', DatePointage) = ?1 AND strftime('%m', DatePointage) = ?2
-                       AND (MatinArrivee IS NOT NULL OR MatinSortie IS NOT NULL
-                            OR ApresMidiArrivee IS NOT NULL OR ApresMidiSortie IS NOT NULL)
+                    "SELECT CAST(strftime('%d', ep.DatePointage) AS INTEGER) AS Jour, COUNT(*)
+                     FROM EnregistrementPointage ep
+                     INNER JOIN Personnel p ON p.Id = ep.PersonnelId
+                     WHERE strftime('%Y', ep.DatePointage) = ?1 AND strftime('%m', ep.DatePointage) = ?2
+                       AND (p.DateArrivee IS NULL OR ep.DatePointage >= p.DateArrivee)
+                       AND (ep.MatinArrivee IS NOT NULL OR ep.MatinSortie IS NOT NULL
+                            OR ep.ApresMidiArrivee IS NOT NULL OR ep.ApresMidiSortie IS NOT NULL)
                      GROUP BY Jour",
                 )
                 .map_err(|e| e.to_string())?;
@@ -841,13 +915,15 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT DISTINCT CAST(strftime('%d', DatePointage) AS INTEGER)
-                     FROM EnregistrementPointage
-                     WHERE PersonnelId = ?1
-                       AND strftime('%Y', DatePointage) = ?2
-                       AND strftime('%m', DatePointage) = ?3
-                       AND (MatinArrivee IS NOT NULL OR MatinSortie IS NOT NULL
-                            OR ApresMidiArrivee IS NOT NULL OR ApresMidiSortie IS NOT NULL)",
+                    "SELECT DISTINCT CAST(strftime('%d', ep.DatePointage) AS INTEGER)
+                     FROM EnregistrementPointage ep
+                     INNER JOIN Personnel p ON p.Id = ep.PersonnelId
+                     WHERE ep.PersonnelId = ?1
+                       AND strftime('%Y', ep.DatePointage) = ?2
+                       AND strftime('%m', ep.DatePointage) = ?3
+                       AND (p.DateArrivee IS NULL OR ep.DatePointage >= p.DateArrivee)
+                       AND (ep.MatinArrivee IS NOT NULL OR ep.MatinSortie IS NOT NULL
+                            OR ep.ApresMidiArrivee IS NOT NULL OR ep.ApresMidiSortie IS NOT NULL)",
                 )
                 .map_err(|e| e.to_string())?;
             let iter = stmt
@@ -913,7 +989,10 @@ impl Database {
             }
             if periodes.is_empty() {
                 Ok(None)
-            } else if periodes.iter().any(|p| p == "jour") {
+            } else if periodes.iter().any(|p| p == "jour")
+                || (periodes.iter().any(|p| p == "matin")
+                    && periodes.iter().any(|p| p == "aprem"))
+            {
                 Ok(Some("jour".into()))
             } else {
                 Ok(Some(periodes[0].clone()))
@@ -957,6 +1036,66 @@ impl Database {
         })
     }
 
+    pub fn transition_ferie(
+        &self,
+        date: NaiveDate,
+        courante: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        self.with_conn(|conn| {
+            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            let date_str = date.format("%Y-%m-%d").to_string();
+
+            let suivante = match courante {
+                None => {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO JourFerie (DatePointage, Periode) VALUES (?1, 'jour')",
+                        params![date_str],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Some("jour")
+                }
+                Some("jour") => {
+                    tx.execute(
+                        "DELETE FROM JourFerie WHERE DatePointage = ?1",
+                        params![date_str],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    tx.execute(
+                        "INSERT INTO JourFerie (DatePointage, Periode) VALUES (?1, 'matin')",
+                        params![date_str],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Some("matin")
+                }
+                Some("matin") => {
+                    tx.execute(
+                        "DELETE FROM JourFerie WHERE DatePointage = ?1",
+                        params![date_str],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    tx.execute(
+                        "INSERT INTO JourFerie (DatePointage, Periode) VALUES (?1, 'aprem')",
+                        params![date_str],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Some("aprem")
+                }
+                Some("aprem") => {
+                    tx.execute(
+                        "DELETE FROM JourFerie WHERE DatePointage = ?1",
+                        params![date_str],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    None
+                }
+                Some(_) => return Err("État de jour férié invalide.".into()),
+            };
+
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(suivante.map(|s| s.to_string()))
+        })
+    }
+
     pub fn get_conges_personnel(&self, personnel_id: i64) -> Result<Vec<Conge>, String> {
         self.with_conn(|conn| Self::query_conges_personnel(conn, personnel_id))
     }
@@ -978,11 +1117,9 @@ impl Database {
                 Ok(Conge {
                     id: r.get(0)?,
                     personnel_id: r.get(1)?,
-                    date_debut: NaiveDate::parse_from_str(&dd, "%Y-%m-%d")
-                        .unwrap_or_else(|_| chrono::Local::now().date_naive()),
-                    date_fin: NaiveDate::parse_from_str(&df, "%Y-%m-%d")
-                        .unwrap_or_else(|_| chrono::Local::now().date_naive()),
-                    periode: r.get(4).unwrap_or_else(|_| "jour".to_string()),
+                    date_debut: convertir_date_sql(&dd, 2)?,
+                    date_fin: convertir_date_sql(&df, 3)?,
+                    periode: r.get(4)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -995,9 +1132,11 @@ impl Database {
         mois: u32,
     ) -> Result<Vec<Conge>, String> {
         self.with_conn(|conn| {
-            let debut_mois = NaiveDate::from_ymd_opt(annee, mois, 1).unwrap();
+            let debut_mois = NaiveDate::from_ymd_opt(annee, mois, 1)
+                .ok_or_else(|| "Année ou mois invalide.".to_string())?;
             let nb = jours_dans_mois(annee, mois);
-            let fin_mois = NaiveDate::from_ymd_opt(annee, mois, nb).unwrap();
+            let fin_mois = NaiveDate::from_ymd_opt(annee, mois, nb)
+                .ok_or_else(|| "Année ou mois invalide.".to_string())?;
             let mut stmt = conn
                 .prepare(
                     "SELECT Id, PersonnelId, DateDebut, DateFin, Periode
@@ -1018,11 +1157,9 @@ impl Database {
                         Ok(Conge {
                             id: r.get(0)?,
                             personnel_id: r.get(1)?,
-                            date_debut: NaiveDate::parse_from_str(&dd, "%Y-%m-%d")
-                                .unwrap_or_else(|_| chrono::Local::now().date_naive()),
-                            date_fin: NaiveDate::parse_from_str(&df, "%Y-%m-%d")
-                                .unwrap_or_else(|_| chrono::Local::now().date_naive()),
-                            periode: r.get(4).unwrap_or_else(|_| "jour".to_string()),
+                            date_debut: convertir_date_sql(&dd, 2)?,
+                            date_fin: convertir_date_sql(&df, 3)?,
+                            periode: r.get(4)?,
                         })
                     },
                 )
@@ -1069,24 +1206,45 @@ impl Database {
             return Err("Periode invalide.".into());
         }
         self.with_conn(|conn| {
-            conn.execute(
+            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            let debut_str = debut.format("%Y-%m-%d").to_string();
+            let fin_str = fin.format("%Y-%m-%d").to_string();
+            let chevauchement: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM Conge
+                     WHERE PersonnelId = ?1
+                       AND DateDebut <= ?2
+                       AND DateFin >= ?3
+                       AND (Periode = 'jour' OR ?4 = 'jour' OR Periode = ?4)",
+                    params![personnel_id, fin_str, debut_str, periode],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if chevauchement > 0 {
+                return Err(
+                    "Ce congé chevauche déjà un congé de même période ou un congé de journée entière."
+                        .into(),
+                );
+            }
+            tx.execute(
                 "INSERT INTO Conge (PersonnelId, DateDebut, DateFin, Periode) VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    personnel_id,
-                    debut.format("%Y-%m-%d").to_string(),
-                    fin.format("%Y-%m-%d").to_string(),
-                    periode
-                ],
+                params![personnel_id, debut_str, fin_str, periode],
             )
             .map_err(|e| e.to_string())?;
-            Ok(conn.last_insert_rowid())
+            let id = tx.last_insert_rowid();
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(id)
         })
     }
 
     pub fn supprimer_conge(&self, conge_id: i64) -> Result<(), String> {
         self.with_conn(|conn| {
-            conn.execute("DELETE FROM Conge WHERE Id = ?1", params![conge_id])
+            let lignes = conn
+                .execute("DELETE FROM Conge WHERE Id = ?1", params![conge_id])
                 .map_err(|e| e.to_string())?;
+            if lignes == 0 {
+                return Err("Congé introuvable.".into());
+            }
             Ok(())
         })
     }
@@ -1099,17 +1257,26 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 "SELECT p.Nom, p.Prenom,
-                        COUNT(ep.Id) AS JoursPresents,
+                        SUM(CASE WHEN ep.MatinArrivee IS NOT NULL OR ep.MatinSortie IS NOT NULL
+                                      OR ep.ApresMidiArrivee IS NOT NULL OR ep.ApresMidiSortie IS NOT NULL
+                                 THEN 1 ELSE 0 END) AS JoursPresents,
                         SUM(CASE WHEN ep.MatinArrivee IS NOT NULL OR ep.MatinSortie IS NOT NULL THEN 1 ELSE 0 END),
                         SUM(CASE WHEN ep.ApresMidiArrivee IS NOT NULL OR ep.ApresMidiSortie IS NOT NULL THEN 1 ELSE 0 END),
                         SUM(
-                          COALESCE((strftime('%s', ep.MatinSortie) - strftime('%s', ep.MatinArrivee)), 0)
-                          + COALESCE((strftime('%s', ep.ApresMidiSortie) - strftime('%s', ep.ApresMidiArrivee)), 0)
+                          CASE WHEN ep.MatinArrivee IS NOT NULL AND ep.MatinSortie IS NOT NULL
+                                    AND ep.MatinSortie >= ep.MatinArrivee
+                               THEN COALESCE(strftime('%s', ep.MatinSortie) - strftime('%s', ep.MatinArrivee), 0)
+                               ELSE 0 END
+                          + CASE WHEN ep.ApresMidiArrivee IS NOT NULL AND ep.ApresMidiSortie IS NOT NULL
+                                      AND ep.ApresMidiSortie >= ep.ApresMidiArrivee
+                                 THEN COALESCE(strftime('%s', ep.ApresMidiSortie) - strftime('%s', ep.ApresMidiArrivee), 0)
+                                 ELSE 0 END
                         ),
                         AVG(strftime('%s', ep.MatinArrivee))
                  FROM Personnel p
                  LEFT JOIN EnregistrementPointage ep
                      ON ep.PersonnelId = p.Id AND ep.DatePointage BETWEEN ?1 AND ?2
+                     AND (p.DateArrivee IS NULL OR ep.DatePointage >= p.DateArrivee)
                  GROUP BY p.Id, p.Nom, p.Prenom
                  ORDER BY p.Nom, p.Prenom",
             )
@@ -1121,15 +1288,9 @@ impl Database {
                     fin.format("%Y-%m-%d").to_string()
                 ],
                 |r| {
-                    let sec_total: Option<f64> = r.get(5).ok();
-                    let moy: Option<f64> = r.get(6).ok();
-                    let total_heures = sec_total
-                        .map(|s| {
-                            let h = (s / 3600.0) as i64;
-                            let m = ((s % 3600.0) / 60.0) as i64;
-                            format!("{}h{:02}", h, m)
-                        })
-                        .unwrap_or_else(|| "-".into());
+                    let sec_total: Option<f64> = r.get(5)?;
+                    let moy: Option<f64> = r.get(6)?;
+                    let total_heures = sec_total.map(|s| s / 3600.0).unwrap_or(0.0);
                     let moyenne_arrivee = moy
                         .map(|s| {
                             let t = s as i64 % 86400;
@@ -1176,9 +1337,8 @@ impl Database {
             .map_err(|e| e.to_string())?;
         for item in iter {
             let (d, p) = item.map_err(|e| e.to_string())?;
-            if let Ok(date) = NaiveDate::parse_from_str(&d, "%Y-%m-%d") {
-                map.entry(date).or_default().push(p);
-            }
+            let date = convertir_date_sql(&d, 0).map_err(|e| e.to_string())?;
+            map.entry(date).or_default().push(p);
         }
         Ok(map)
     }
@@ -1207,11 +1367,9 @@ impl Database {
                     let df: String = r.get(2)?;
                     Ok((
                         r.get::<_, i64>(0)?,
-                        NaiveDate::parse_from_str(&dd, "%Y-%m-%d")
-                            .unwrap_or_else(|_| chrono::Local::now().date_naive()),
-                        NaiveDate::parse_from_str(&df, "%Y-%m-%d")
-                            .unwrap_or_else(|_| chrono::Local::now().date_naive()),
-                        r.get::<_, String>(3).unwrap_or_else(|_| "jour".to_string()),
+                        convertir_date_sql(&dd, 1)?,
+                        convertir_date_sql(&df, 2)?,
+                        r.get::<_, String>(3)?,
                     ))
                 },
             )
@@ -1262,154 +1420,124 @@ impl Database {
         debut: NaiveDate,
         fin: NaiveDate,
     ) -> Result<Vec<(String, f64, usize)>, String> {
-        self.with_conn(|conn| {
-            let feries = Self::charger_feries_par_date(conn, debut, fin)?;
-            let conges = Self::charger_conges_par_date(conn, debut, fin)?;
+        self.with_conn(|conn| Self::query_classement_periode(conn, debut, fin))
+    }
 
-            let mut stmt = conn
-                .prepare(
-                    "SELECT p.Id, p.Nom || ' ' || p.Prenom AS Nom,
-                            ep.DatePointage, ep.MatinArrivee, ep.MatinSortie,
-                            ep.ApresMidiArrivee, ep.ApresMidiSortie
-                     FROM EnregistrementPointage ep
-                     INNER JOIN Personnel p ON p.Id = ep.PersonnelId
-                     WHERE ep.DatePointage BETWEEN ?1 AND ?2
-                     ORDER BY p.Nom, p.Prenom, ep.DatePointage",
-                )
-                .map_err(|e| e.to_string())?;
-            let iter = stmt
-                .query_map(
-                    params![
-                        debut.format("%Y-%m-%d").to_string(),
-                        fin.format("%Y-%m-%d").to_string()
-                    ],
-                    |r| {
-                        let date_str: String = r.get(2)?;
-                        let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
-                            .unwrap_or_else(|_| chrono::Local::now().date_naive());
-                        let parse_time = |opt: Option<String>| -> Option<NaiveTime> {
-                            opt.and_then(|s| NaiveTime::parse_from_str(&s, "%H:%M:%S").ok())
-                        };
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, String>(1)?,
-                            date,
-                            parse_time(r.get(3)?),
-                            parse_time(r.get(4)?),
-                            parse_time(r.get(5)?),
-                            parse_time(r.get(6)?),
-                        ))
-                    },
-                )
-                .map_err(|e| e.to_string())?;
+    fn query_classement_periode(
+        conn: &Connection,
+        debut: NaiveDate,
+        fin: NaiveDate,
+    ) -> Result<Vec<(String, f64, usize)>, String> {
+        if debut > fin {
+            return Err("La date de début doit être antérieure ou égale à la date de fin.".into());
+        }
 
-            let mut acc: HashMap<String, (f64, usize)> = HashMap::new();
-            for item in iter {
-                let (pid, nom, date, ma, ms, aa, as_) = item.map_err(|e| e.to_string())?;
-                if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+        let personnel = Self::query_personnel(conn)?;
+        let pointages = Self::query_pointages_periode(conn, debut, fin)?;
+        let feries = Self::charger_feries_par_date(conn, debut, fin)?;
+        let conges = Self::charger_conges_par_date(conn, debut, fin)?;
+
+        let mut resultats = Vec::with_capacity(personnel.len());
+
+        for p in personnel {
+            let mut jours_ouvrables = 0u32;
+            let date_fin_effective = fin.min(chrono::Local::now().date_naive());
+            let mut date = debut;
+            while date <= date_fin_effective {
+                let weekend = matches!(date.weekday(), Weekday::Sat | Weekday::Sun);
+                let avant_arrivee = p.date_arrivee.map(|d| date < d).unwrap_or(false);
+                let (conge_matin, conge_aprem) =
+                    Self::periode_conges(&conges, p.id, date);
+                if !weekend
+                    && !avant_arrivee
+                    && !Self::ferie_entier(&feries, date)
+                    && !(conge_matin && conge_aprem)
+                {
+                    jours_ouvrables += 1;
+                }
+                date = match date.succ_opt() {
+                    Some(d) => d,
+                    None => break,
+                };
+            }
+
+            let mut somme = 0.0_f64;
+            let mut jours_evalues = 0_usize;
+
+            for pt in pointages.iter().filter(|pt| pt.personnel_id == p.id) {
+                let date = pt.date_pointage;
+                if matches!(date.weekday(), Weekday::Sat | Weekday::Sun)
+                    || date > chrono::Local::now().date_naive()
+                    || p.date_arrivee.map(|d| date < d).unwrap_or(false)
+                    || Self::ferie_entier(&feries, date)
+                {
                     continue;
                 }
-                if Self::ferie_entier(&feries, date) {
-                    continue;
-                }
-                let (conge_matin, conge_aprem) = Self::periode_conges(&conges, pid, date);
+
+                let (conge_matin, conge_aprem) =
+                    Self::periode_conges(&conges, p.id, date);
                 if conge_matin && conge_aprem {
                     continue;
                 }
+
                 let matin_bloque = conge_matin
                     || feries
                         .get(&date)
-                        .map(|v| v.iter().any(|p| p == "matin"))
+                        .map(|v| v.iter().any(|periode| periode == "matin"))
                         .unwrap_or(false);
                 let aprem_bloque = conge_aprem
                     || feries
                         .get(&date)
-                        .map(|v| v.iter().any(|p| p == "aprem"))
+                        .map(|v| v.iter().any(|periode| periode == "aprem"))
                         .unwrap_or(false);
-                let mut max_jour = 0.0;
-                if !matin_bloque {
-                    max_jour += 10.0;
-                }
-                if !aprem_bloque {
-                    max_jour += 10.0;
-                }
-                if max_jour <= 0.0 {
-                    continue;
-                }
 
-                let mut pts = 0.0;
-                let mut a_matin = false;
-                let mut a_aprem = false;
+                // Même règle que le bilan à l'écran : une demi-journée
+                // neutralisée ne pénalise pas la note de la demi-journée travaillée.
+                let mut points = 0.0;
+                let mut points_max = 0.0;
 
-                if !matin_bloque && (ma.is_some() || ms.is_some()) {
-                    a_matin = true;
-                    if let Some(x) = ma {
-                        pts += note_matin_arrivee_5(x);
+                if !matin_bloque
+                    && (pt.matin_arrivee.is_some() || pt.matin_sortie.is_some())
+                {
+                    points_max += 10.0;
+                    if let Some(t) = pt.matin_arrivee {
+                        points += note_matin_arrivee_5(t);
                     }
-                    if let Some(x) = ms {
-                        pts += note_matin_sortie_5(x);
-                    }
-                }
-                if !aprem_bloque && (aa.is_some() || as_.is_some()) {
-                    a_aprem = true;
-                    if let Some(x) = aa {
-                        pts += note_aprem_arrivee_5(x);
-                    }
-                    if let Some(x) = as_ {
-                        pts += note_aprem_sortie_5(x);
+                    if let Some(t) = pt.matin_sortie {
+                        points += note_matin_sortie_5(t);
                     }
                 }
 
-                if !(a_matin || a_aprem) {
-                    continue;
+                if !aprem_bloque
+                    && (pt.apres_midi_arrivee.is_some() || pt.apres_midi_sortie.is_some())
+                {
+                    points_max += 10.0;
+                    if let Some(t) = pt.apres_midi_arrivee {
+                        points += note_aprem_arrivee_5(t);
+                    }
+                    if let Some(t) = pt.apres_midi_sortie {
+                        points += note_aprem_sortie_5(t);
+                    }
                 }
 
-                let note20 = (pts / max_jour) * 20.0;
-                let e = acc.entry(nom).or_insert((0.0, 0));
-                e.0 += note20;
-                e.1 += 1;
+                if points_max > 0.0 {
+                    somme += (points / points_max) * 20.0;
+                    jours_evalues += 1;
+                }
             }
 
-            let jours_ouvrables = {
-                let mut total = 0u32;
-                let mut d = debut;
-                while d <= fin {
-                    let weekend = matches!(d.weekday(), Weekday::Sat | Weekday::Sun);
-                    if !weekend && !Self::ferie_entier(&feries, d) {
-                        total += 1;
-                    }
-                    d = match d.succ_opt() {
-                        Some(n) => n,
-                        None => break,
-                    };
-                }
-                total.max(1) as f64
-            };
+            let note = somme / f64::from(jours_ouvrables.max(1));
+            resultats.push((p.nom_complet(), note, jours_evalues));
+        }
 
-            let mut out: Vec<(String, f64, usize)> = acc
-                .into_iter()
-                .map(|(nom, (somme, compte))| {
-                    (
-                        nom,
-                        if jours_ouvrables > 0.0 {
-                            somme / jours_ouvrables
-                        } else {
-                            0.0
-                        },
-                        compte,
-                    )
-                })
-                .collect();
+        resultats.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(b.2.cmp(&a.2))
+                .then(a.0.cmp(&b.0))
+        });
 
-            out.sort_by(|a, b| {
-                b.1.partial_cmp(&a.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(b.2.cmp(&a.2))
-                    .then(a.0.cmp(&b.0))
-            });
-
-            Ok(out)
-        })
+        Ok(resultats)
     }
 
     pub fn exporter_snapshot(
@@ -1417,12 +1545,16 @@ impl Database {
         debut: NaiveDate,
         fin: NaiveDate,
     ) -> Result<ExportSnapshot, String> {
+        if debut > fin {
+            return Err("La date de début doit être antérieure ou égale à la date de fin.".into());
+        }
         self.with_conn(|conn| {
             conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
             let resultat = (|| -> Result<ExportSnapshot, String> {
                 let personnel = Self::query_personnel(conn)?;
                 let pointages = Self::query_pointages_periode(conn, debut, fin)?;
                 let bilan = Self::query_bilan(conn, debut, fin)?;
+                let classement = Self::query_classement_periode(conn, debut, fin)?;
                 let feries = {
                     let mut map: HashMap<String, Vec<String>> = HashMap::new();
                     let mut stmt = conn
@@ -1468,15 +1600,9 @@ impl Database {
                                 Ok(Conge {
                                     id: r.get(0)?,
                                     personnel_id: r.get(1)?,
-                                    date_debut: NaiveDate::parse_from_str(&dd, "%Y-%m-%d")
-                                        .unwrap_or_else(|_| {
-                                            chrono::Local::now().date_naive()
-                                        }),
-                                    date_fin: NaiveDate::parse_from_str(&df, "%Y-%m-%d")
-                                        .unwrap_or_else(|_| {
-                                            chrono::Local::now().date_naive()
-                                        }),
-                                    periode: r.get(4).unwrap_or_else(|_| "jour".to_string()),
+                                    date_debut: convertir_date_sql(&dd, 2)?,
+                                    date_fin: convertir_date_sql(&df, 3)?,
+                                    periode: r.get(4)?,
                                 })
                             },
                         )
@@ -1492,11 +1618,14 @@ impl Database {
                         [],
                         |r| r.get::<_, String>(0),
                     )
-                    .unwrap_or_else(|_| "Pointage".into());
+                    .optional()
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or_else(|| "Pointage".into());
                 Ok(ExportSnapshot {
                     personnel,
                     pointages,
                     bilan,
+                    classement,
                     feries,
                     conges,
                     nom_entreprise,
@@ -1541,13 +1670,20 @@ impl Database {
         })?;
         let nettoyage = (|| -> Result<(), String> {
             let copie = Connection::open(&temp_path).map_err(|e| e.to_string())?;
+            copie.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON;")
+                .map_err(|e| format!("Préparation du nettoyage de la sauvegarde impossible : {}", e))?;
             copie.execute_batch("DROP TABLE IF EXISTS Utilisateur;")
                 .map_err(|e| format!("Impossible d'exclure les comptes de la sauvegarde : {}", e))?;
+            copie.execute("DELETE FROM sqlite_sequence WHERE name = 'Utilisateur'", [])
+                .map_err(|e| e.to_string())?;
+            // VACUUM réécrit physiquement le fichier pour ne pas laisser
+            // les anciennes pages contenant les mots de passe dans le freelist.
+            copie.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+                .map_err(|e| format!("Nettoyage physique des données de compte impossible : {}", e))?;
             let integrite: String = copie.query_row("PRAGMA integrity_check", [], |r| r.get(0)).map_err(|e| e.to_string())?;
             if integrite.to_lowercase() != "ok" {
                 return Err(format!("La vérification d'intégrité de la sauvegarde a échoué : {}", integrite));
             }
-            copie.execute("DELETE FROM sqlite_sequence WHERE name = 'Utilisateur'", []).map_err(|e| e.to_string())?;
             Ok(())
         })();
         if let Err(e) = nettoyage {
@@ -1596,12 +1732,28 @@ impl Database {
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
-        let copie = Connection::open(&chemin_backup).map_err(|e| e.to_string())?;
-        copie.execute_batch("DROP TABLE IF EXISTS Utilisateur;")
-            .map_err(|e| format!("Impossible d'exclure les comptes de la sauvegarde locale : {}", e))?;
-        copie.execute("DELETE FROM sqlite_sequence WHERE name = 'Utilisateur'", [])
-            .map_err(|e| e.to_string())?;
-        drop(copie);
+        let nettoyage = (|| -> Result<(), String> {
+            let copie = Connection::open(&chemin_backup).map_err(|e| e.to_string())?;
+            copie.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON;")
+                .map_err(|e| format!("Préparation du nettoyage de la sauvegarde locale impossible : {}", e))?;
+            copie.execute_batch("DROP TABLE IF EXISTS Utilisateur;")
+                .map_err(|e| format!("Impossible d'exclure les comptes de la sauvegarde locale : {}", e))?;
+            copie.execute("DELETE FROM sqlite_sequence WHERE name = 'Utilisateur'", [])
+                .map_err(|e| e.to_string())?;
+            copie.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+                .map_err(|e| format!("Nettoyage physique de la sauvegarde impossible : {}", e))?;
+            let integrite: String = copie
+                .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            if integrite.to_lowercase() != "ok" {
+                return Err(format!("Sauvegarde locale invalide : {}", integrite));
+            }
+            Ok(())
+        })();
+        if let Err(e) = nettoyage {
+            let _ = std::fs::remove_file(&chemin_backup);
+            return Err(e);
+        }
 
         Ok(chemin_backup)
     }
@@ -1625,8 +1777,6 @@ impl Database {
             }
         }
 
-        let _ = self.sauvegarde_avant_import()?;
-
         let verif = Connection::open_with_flags(
             &source_canon,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
@@ -1649,17 +1799,25 @@ impl Database {
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
                  WHERE type='table'
-                   AND name IN ('Personnel','EnregistrementPointage','JourFerie')",
+                   AND name IN ('Personnel','EnregistrementPointage')",
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
-        if tables_ok < 3 {
+            .map_err(|e| e.to_string())?;
+        if tables_ok < 2 {
             return Err(
-                "Le fichier selectionne n'est pas une base Pointage valide (tables manquantes)."
+                "Le fichier sélectionné n'est pas une base Pointage valide (tables principales manquantes)."
                     .into(),
             );
         }
+
+        let a_ferie: i64 = verif
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='JourFerie'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
 
         let colonnes_personnel: i64 = verif
             .query_row(
@@ -1668,7 +1826,7 @@ impl Database {
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
         if colonnes_personnel < 10 {
             return Err("Le fichier source a un schema Personnel incompatible.".into());
         }
@@ -1680,7 +1838,7 @@ impl Database {
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
         if colonnes_pointage < 8 {
             return Err("Le fichier source a un schema EnregistrementPointage incompatible.".into());
         }
@@ -1691,7 +1849,7 @@ impl Database {
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
 
         let a_conge: i64 = verif
             .query_row(
@@ -1699,7 +1857,7 @@ impl Database {
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
 
         let a_conge_periode: i64 = if a_conge > 0 {
             verif
@@ -1708,7 +1866,7 @@ impl Database {
                     [],
                     |r| r.get(0),
                 )
-                .unwrap_or(0)
+                .map_err(|e| e.to_string())?
         } else {
             0
         };
@@ -1737,10 +1895,14 @@ impl Database {
             let mut stmt = verif.prepare(sql).map_err(|e| e.to_string())?;
             let iter = stmt
                 .query_map([], |r| {
+                    let date_arrivee: Option<String> = r.get(10)?;
+                    if let Some(date) = date_arrivee.as_deref() {
+                        convertir_date_sql(date, 10)?;
+                    }
                     Ok((
                         r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
                         r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
-                        r.get(10)?,
+                        date_arrivee,
                     ))
                 })
                 .map_err(|e| e.to_string())?;
@@ -1757,23 +1919,43 @@ impl Database {
                 .map_err(|e| e.to_string())?;
             let iter = stmt
                 .query_map([], |r| {
+                    let date: String = r.get(2)?;
+                    convertir_date_sql(&date, 2)?;
+                    let matin_arrivee: Option<String> = r.get(3)?;
+                    let matin_sortie: Option<String> = r.get(4)?;
+                    let apres_midi_arrivee: Option<String> = r.get(5)?;
+                    let apres_midi_sortie: Option<String> = r.get(6)?;
+                    convertir_heure_sql(matin_arrivee.clone(), 3)?;
+                    convertir_heure_sql(matin_sortie.clone(), 4)?;
+                    convertir_heure_sql(apres_midi_arrivee.clone(), 5)?;
+                    convertir_heure_sql(apres_midi_sortie.clone(), 6)?;
                     Ok((
-                        r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?,
-                        r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?,
+                        r.get(0)?, r.get(1)?, date, matin_arrivee,
+                        matin_sortie, apres_midi_arrivee, apres_midi_sortie, r.get(7)?,
                     ))
                 })
                 .map_err(|e| e.to_string())?;
             iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
         };
 
-        let feries: Vec<(i64, String, String)> = {
+        let feries: Vec<(i64, String, String)> = if a_ferie > 0 {
             let mut stmt = verif
                 .prepare("SELECT Id, DatePointage, Periode FROM JourFerie ORDER BY Id")
                 .map_err(|e| e.to_string())?;
             let iter = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .query_map([], |r| {
+                    let date: String = r.get(1)?;
+                    let periode: String = r.get(2)?;
+                    convertir_date_sql(&date, 1)?;
+                    if !matches!(periode.as_str(), "jour" | "matin" | "aprem") {
+                        return Err(rusqlite::Error::InvalidQuery);
+                    }
+                    Ok((r.get(0)?, date, periode))
+                })
                 .map_err(|e| e.to_string())?;
             iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        } else {
+            Vec::new()
         };
 
         let conges: Vec<LigneConge> = if a_conge > 0 {
@@ -1785,7 +1967,17 @@ impl Database {
             let mut stmt = verif.prepare(sql).map_err(|e| e.to_string())?;
             let iter = stmt
                 .query_map([], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                    let debut: String = r.get(2)?;
+                    let fin: String = r.get(3)?;
+                    let periode: String = r.get(4)?;
+                    let debut_date = convertir_date_sql(&debut, 2)?;
+                    let fin_date = convertir_date_sql(&fin, 3)?;
+                    if fin_date < debut_date
+                        || !matches!(periode.as_str(), "jour" | "matin" | "aprem")
+                    {
+                        return Err(rusqlite::Error::InvalidQuery);
+                    }
+                    Ok((r.get(0)?, r.get(1)?, debut, fin, periode))
                 })
                 .map_err(|e| e.to_string())?;
             iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
@@ -1800,7 +1992,7 @@ impl Database {
                     [],
                     |r| r.get(0),
                 )
-                .unwrap_or(0);
+                .map_err(|e| e.to_string())?;
             if existe == 0 {
                 Vec::new()
             } else {
@@ -1816,8 +2008,12 @@ impl Database {
 
         drop(verif);
 
+        // Le fichier source est maintenant validé : on crée la sauvegarde juste
+        // avant la transaction d'import, sans produire de backup pour un fichier invalide.
+        let _ = self.sauvegarde_avant_import()?;
+
         self.with_conn(|conn| {
-            conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+            conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
 
             let resultat = (|| -> Result<(), String> {
                 let ids_personnel_locaux: HashSet<i64> = {
@@ -1834,7 +2030,7 @@ impl Database {
                     set
                 };
 
-                let cles_pointage_locales: HashSet<(i64, String)> = {
+                let mut cles_pointage_locales: HashSet<(i64, String)> = {
                     let mut stmt = conn
                         .prepare("SELECT PersonnelId, DatePointage FROM EnregistrementPointage")
                         .map_err(|e| e.to_string())?;
@@ -1848,7 +2044,7 @@ impl Database {
                     set
                 };
 
-                let cles_ferie_locales: HashSet<(String, String)> = {
+                let mut cles_ferie_locales: HashSet<(String, String)> = {
                     let mut stmt = conn
                         .prepare("SELECT DatePointage, Periode FROM JourFerie")
                         .map_err(|e| e.to_string())?;
@@ -1862,12 +2058,32 @@ impl Database {
                     set
                 };
 
-                let ids_conge_locaux: HashSet<i64> = {
+                let mut ids_conge_locaux: HashSet<i64> = {
                     let mut stmt = conn
                         .prepare("SELECT Id FROM Conge")
                         .map_err(|e| e.to_string())?;
                     let iter = stmt
                         .query_map([], |r| r.get::<_, i64>(0))
+                        .map_err(|e| e.to_string())?;
+                    let mut set = HashSet::new();
+                    for item in iter {
+                        set.insert(item.map_err(|e| e.to_string())?);
+                    }
+                    set
+                };
+                let mut cles_conge_locales: HashSet<(i64, String, String, String)> = {
+                    let mut stmt = conn
+                        .prepare("SELECT PersonnelId, DateDebut, DateFin, Periode FROM Conge")
+                        .map_err(|e| e.to_string())?;
+                    let iter = stmt
+                        .query_map([], |r| {
+                            Ok((
+                                r.get::<_, i64>(0)?,
+                                r.get::<_, String>(1)?,
+                                r.get::<_, String>(2)?,
+                                r.get::<_, String>(3)?,
+                            ))
+                        })
                         .map_err(|e| e.to_string())?;
                     let mut set = HashSet::new();
                     for item in iter {
@@ -1931,7 +2147,10 @@ impl Database {
                         .map_err(|e| e.to_string())?;
                     for pt in &pointages {
                         if !ids_personnel_effectifs.contains(&pt.1) {
-                            continue;
+                            return Err(format!(
+                                "Le pointage {} référence un employé absent de la base source. Import annulé.",
+                                pt.0
+                            ));
                         }
                         let cle = (pt.1, pt.2.clone());
                         if cles_pointage_locales.contains(&cle) {
@@ -1948,6 +2167,7 @@ impl Database {
                         stmt.execute(params![
                             pt.0, pt.1, pt.2, pt.3, pt.4, pt.5, pt.6, pt.7
                         ]).map_err(|e| format!("Import du pointage {} impossible : {}", pt.0, e))?;
+                        cles_pointage_locales.insert(cle);
                     }
                 }
 
@@ -1963,6 +2183,7 @@ impl Database {
                             continue;
                         }
                         stmt.execute(params![f.0, f.1, f.2]).map_err(|e| format!("Import du jour férié {} impossible : {}", f.0, e))?;
+                        cles_ferie_locales.insert(cle);
                     }
                 }
 
@@ -1984,10 +2205,21 @@ impl Database {
                             }
                             continue;
                         }
-                        if !ids_personnel_effectifs.contains(&c.1) {
+
+                        let cle = (c.1, c.2.clone(), c.3.clone(), c.4.clone());
+                        if cles_conge_locales.contains(&cle) {
                             continue;
                         }
-                        stmt.execute(params![c.0, c.1, c.2, c.3, c.4]).map_err(|e| format!("Import du congé {} impossible : {}", c.0, e))?;
+                        if !ids_personnel_effectifs.contains(&c.1) {
+                            return Err(format!(
+                                "Le congé {} référence un employé absent de la base source. Import annulé.",
+                                c.0
+                            ));
+                        }
+                        stmt.execute(params![c.0, c.1, c.2, c.3, c.4])
+                            .map_err(|e| format!("Import du congé {} impossible : {}", c.0, e))?;
+                        ids_conge_locaux.insert(c.0);
+                        cles_conge_locales.insert(cle);
                     }
                 }
 
@@ -2091,3 +2323,31 @@ fn jours_dans_mois(annee: i32, mois: u32) -> u32 {
     }
 }
 
+
+#[cfg(test)]
+mod tests_notation_horaires {
+    use super::*;
+
+    fn h(h: u32, m: u32) -> NaiveTime {
+        NaiveTime::from_hms_opt(h, m, 0).unwrap()
+    }
+
+    #[test]
+    fn regles_matin_arrivee_et_depart() {
+        assert_eq!(note_matin_arrivee_5(h(6, 0)), 5.0);
+        assert_eq!(note_matin_arrivee_5(h(7, 0)), 5.0);
+        assert_eq!(note_matin_arrivee_5(h(8, 15)), 5.0);
+        assert_eq!(note_matin_arrivee_5(h(8, 16)), 0.0);
+        assert_eq!(note_matin_sortie_5(h(11, 44)), 0.0);
+        assert_eq!(note_matin_sortie_5(h(11, 45)), 5.0);
+    }
+
+    #[test]
+    fn regles_apres_midi_arrivee_et_depart() {
+        assert_eq!(note_aprem_arrivee_5(h(6, 0)), 5.0);
+        assert_eq!(note_aprem_arrivee_5(h(14, 15)), 5.0);
+        assert_eq!(note_aprem_arrivee_5(h(14, 16)), 0.0);
+        assert_eq!(note_aprem_sortie_5(h(15, 44)), 0.0);
+        assert_eq!(note_aprem_sortie_5(h(15, 45)), 5.0);
+    }
+}

@@ -1,4 +1,3 @@
-
 use crate::database::Database;
 use crate::models::Personnel;
 use crate::theme;
@@ -361,6 +360,10 @@ fn formulaire_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PersonnelStat
         }
     });
 
+    if !state.message.is_empty() {
+        ui.add_space(8.0);
+        theme::message_inline(ui, &state.message, state.message_ok);
+    }
 }
 
 struct Colonnes {
@@ -399,7 +402,19 @@ fn table_droite(
     hauteur: f32,
 ) {
     if state.cache.is_none() {
-        state.cache = Some(db.get_personnel().unwrap_or_default());
+        match db.get_personnel() {
+            Ok(personnel) => {
+                state.cache = Some(personnel);
+                if state.message.starts_with("Chargement du personnel impossible :") {
+                    state.message.clear();
+                    state.message_ok = true;
+                }
+            }
+            Err(e) => {
+                state.message = format!("Chargement du personnel impossible : {}", e);
+                state.message_ok = false;
+            }
+        }
     }
     let source = state.cache.clone().unwrap_or_default();
 

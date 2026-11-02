@@ -1,6 +1,9 @@
 fn main() {
-    #[cfg(windows)]
-    {
+    let cible_windows = std::env::var("CARGO_CFG_TARGET_OS")
+        .map(|os| os == "windows")
+        .unwrap_or(false);
+
+    if cible_windows {
         let mut res = winres::WindowsResource::new();
         res.set_icon("Images/logo.ico");
         res.set("ProductName", "Pointage");

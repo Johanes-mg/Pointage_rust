@@ -42,7 +42,8 @@ impl eframe::App for App {
             AppState::Login(state) => match ui::login::afficher(ctx, &self.db, state) {
                 LoginAction::Connecte(u) => {
                     if let Err(e) = self.db.ouvrir_session(&u.nom_utilisateur) {
-                        eprintln!("Erreur ouverture session : {}", e);
+                        state.message = format!("Ouverture de la base impossible : {}", e);
+                        state.message_ok = false;
                         return;
                     }
                     let mw = ui::main_window::MainWindowState::new(&self.db, &u);

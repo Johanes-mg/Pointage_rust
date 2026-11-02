@@ -1,7 +1,7 @@
 use crate::database::Database;
 use crate::models::Personnel;
 use crate::theme;
-use chrono::{Datelike, Local, NaiveDate, NaiveTime, Timelike};
+use chrono::{Datelike, Local, NaiveDate, NaiveTime};
 use std::collections::HashMap;
 
 const CASE_LARGEUR: f32 = 46.0;
@@ -16,6 +16,10 @@ pub struct PointageEnCours {
     pub aprem_arr: Option<NaiveTime>,
     pub aprem_sort: Option<NaiveTime>,
     pub observation: String,
+    pub matin_arr_saisie: String,
+    pub matin_sort_saisie: String,
+    pub aprem_arr_saisie: String,
+    pub aprem_sort_saisie: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -298,9 +302,18 @@ fn afficher_dialog_conge(ctx: &egui::Context, db: &Database, state: &mut Pointag
                                             26.0,
                                             14.0,
                                         ) {
-                                            let _ = db.supprimer_conge(c.id);
-                                            state.cache_date_pointages = None;
-                                            state.rafraichir = true;
+                                            match db.supprimer_conge(c.id) {
+                                                Ok(()) => {
+                                                    state.dialog_conge.message = "Congé supprimé.".into();
+                                                    state.dialog_conge.message_ok = true;
+                                                    state.cache_date_pointages = None;
+                                                    state.rafraichir = true;
+                                                }
+                                                Err(e) => {
+                                                    state.dialog_conge.message = format!("Erreur : {}", e);
+                                                    state.dialog_conge.message_ok = false;
+                                                }
+                                            }
                                         }
                                     },
                                 );
@@ -456,20 +469,43 @@ fn champ_date_dialog(ui: &mut egui::Ui, date: &mut NaiveDate, id: &str) {
 fn charger_stats_mois(db: &Database, state: &mut PointageState) {
     let cle = (state.mois_affiche.year(), state.mois_affiche.month());
     if state.cache_mois != Some(cle) {
-        state.stats_mois = db
-            .get_statistiques_mois(cle.0, cle.1)
-            .unwrap_or_default();
-        state.feries_mois = db
-            .get_jours_feries_du_mois(cle.0, cle.1)
-            .unwrap_or_default();
-        state.cache_mois = Some(cle);
+        match (
+            db.get_statistiques_mois(cle.0, cle.1),
+            db.get_jours_feries_du_mois(cle.0, cle.1),
+        ) {
+            (Ok(stats), Ok(feries)) => {
+                state.stats_mois = stats;
+                state.feries_mois = feries;
+                state.cache_mois = Some(cle);
+                if state.message_action.starts_with("Chargement du calendrier impossible :") {
+                    state.message_action.clear();
+                    state.message_action_ok = true;
+                }
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                state.message_action = format!("Chargement du calendrier impossible : {}", e);
+                state.message_action_ok = false;
+            }
+        }
     }
 }
 
 fn charger_ferie_jour(db: &Database, state: &mut PointageState) {
     if state.cache_ferie_date != Some(state.date_selectionnee) {
-        state.ferie_jour = db.get_ferie_jour(state.date_selectionnee).unwrap_or(None);
-        state.cache_ferie_date = Some(state.date_selectionnee);
+        match db.get_ferie_jour(state.date_selectionnee) {
+            Ok(ferie) => {
+                state.ferie_jour = ferie;
+                state.cache_ferie_date = Some(state.date_selectionnee);
+                if state.message_action.starts_with("Lecture du jour férié impossible :") {
+                    state.message_action.clear();
+                    state.message_action_ok = true;
+                }
+            }
+            Err(e) => {
+                state.message_action = format!("Lecture du jour férié impossible : {}", e);
+                state.message_action_ok = false;
+            }
+        }
     }
 }
 
@@ -493,9 +529,20 @@ fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
         return;
     }
 
-    let pointages = db
-        .get_pointages_du_jour(state.date_selectionnee)
-        .unwrap_or_default();
+    let pointages = match db.get_pointages_du_jour(state.date_selectionnee) {
+        Ok(pointages) => {
+            if state.message_action.starts_with("Chargement des pointages impossible :") {
+                state.message_action.clear();
+                state.message_action_ok = true;
+            }
+            pointages
+        },
+        Err(e) => {
+            state.message_action = format!("Chargement des pointages impossible : {}", e);
+            state.message_action_ok = false;
+            return;
+        }
+    };
 
     state.enregistrements_jour = pointages.iter().map(|p| p.personnel_id).collect();
 
@@ -513,8 +560,8 @@ fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
     state.conges_jour.clear();
     if let Some(personnes) = state.cache_personnel.clone() {
         for p in &personnes {
-            if let Ok(periodes) = db.conges_du_jour_pour(p.id, state.date_selectionnee) {
-                if !periodes.is_empty() {
+            match db.conges_du_jour_pour(p.id, state.date_selectionnee) {
+                Ok(periodes) if !periodes.is_empty() => {
                     let mut cj = CongeJour::default();
                     for per in periodes {
                         match per.as_str() {
@@ -528,6 +575,11 @@ fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
                         }
                     }
                     state.conges_jour.insert(p.id, cj);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    state.message_action = format!("Chargement des congés impossible : {}", e);
+                    state.message_action_ok = false;
                 }
             }
         }
@@ -548,6 +600,10 @@ fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
                     aprem_arr: e.apres_midi_arrivee,
                     aprem_sort: e.apres_midi_sortie,
                     observation: e.observation.clone().unwrap_or_default(),
+                    matin_arr_saisie: e.matin_arrivee.map(|t| t.format("%H:%M").to_string()).unwrap_or_default(),
+                    matin_sort_saisie: e.matin_sortie.map(|t| t.format("%H:%M").to_string()).unwrap_or_default(),
+                    aprem_arr_saisie: e.apres_midi_arrivee.map(|t| t.format("%H:%M").to_string()).unwrap_or_default(),
+                    aprem_sort_saisie: e.apres_midi_sortie.map(|t| t.format("%H:%M").to_string()).unwrap_or_default(),
                 };
                 state.brouillons.insert(p.id, pointage.clone());
                 state.pointages_sauvegardes.insert(p.id, pointage);
@@ -585,25 +641,8 @@ fn appliquer_transition_ferie(
     db: &Database,
     date: NaiveDate,
     courante: Option<&str>,
-) -> Option<String> {
-    let _ = match courante {
-        Some("jour") => {
-            db.set_ferie(date, "jour", false).ok();
-            db.set_ferie(date, "matin", true).ok();
-        }
-        Some("matin") => {
-            db.set_ferie(date, "matin", false).ok();
-            db.set_ferie(date, "aprem", true).ok();
-        }
-        Some("aprem") => {
-            db.clear_ferie_jour(date).ok();
-        }
-        None => {
-            db.set_ferie(date, "jour", true).ok();
-        }
-        _ => {}
-    };
-    prochaine_periode(courante).map(|s| s.to_string())
+) -> Result<Option<String>, String> {
+    db.transition_ferie(date, courante)
 }
 
 fn ajuster_date_selectionnee(state: &mut PointageState) {
@@ -905,14 +944,21 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
 
                 if bouton {
                     let courante = state.ferie_jour.as_deref();
-                    let nouvelle =
-                        appliquer_transition_ferie(db, state.date_selectionnee, courante);
-                    state.ferie_jour = nouvelle;
-                    state.cache_mois = None;
-                    state.cache_ferie_date = Some(state.date_selectionnee);
-                    state.cache_date_pointages = None;
-                    state.brouillons.clear();
-                    state.rafraichir = true;
+                    match appliquer_transition_ferie(db, state.date_selectionnee, courante) {
+                        Ok(nouvelle) => {
+                            state.ferie_jour = nouvelle;
+                            state.cache_mois = None;
+                            state.cache_ferie_date = Some(state.date_selectionnee);
+                            state.cache_date_pointages = None;
+                            state.brouillons.clear();
+                            state.rafraichir = true;
+                            state.message_action.clear();
+                        }
+                        Err(e) => {
+                            state.message_action = format!("Modification du jour férié impossible : {}", e);
+                            state.message_action_ok = false;
+                        }
+                    }
                 }
             });
     });
@@ -939,7 +985,21 @@ fn employes_droite(
     hauteur_panneau: f32,
 ) {
     if state.cache_personnel.is_none() {
-        state.cache_personnel = Some(db.get_personnel().unwrap_or_default());
+        match db.get_personnel() {
+            Ok(personnel) => {
+                state.cache_personnel = Some(personnel);
+                state.cache_date_pointages = None;
+                state.rafraichir = true;
+                if state.message_action.starts_with("Chargement du personnel impossible :") {
+                    state.message_action.clear();
+                    state.message_action_ok = true;
+                }
+            },
+            Err(e) => {
+                state.message_action = format!("Chargement du personnel impossible : {}", e);
+                state.message_action_ok = false;
+            }
+        }
     }
 
     charger_pointages_jour(db, state);
@@ -948,7 +1008,10 @@ fn employes_droite(
 
     let eligibles: Vec<Personnel> = toutes
         .iter()
-        .filter(|p| !est_avant_arrivee(p, state.date_selectionnee))
+        .filter(|p| {
+            !est_avant_arrivee(p, state.date_selectionnee)
+                || state.enregistrements_jour.contains(&p.id)
+        })
         .cloned()
         .collect();
 
@@ -1312,6 +1375,8 @@ fn employes_droite(
                                         &mut b.coche_matin,
                                         &mut b.matin_arr,
                                         &mut b.matin_sort,
+                                        &mut b.matin_arr_saisie,
+                                        &mut b.matin_sort_saisie,
                                         8,
                                         12,
                                         matin_bloque,
@@ -1324,6 +1389,8 @@ fn employes_droite(
                                         &mut b.coche_aprem,
                                         &mut b.aprem_arr,
                                         &mut b.aprem_sort,
+                                        &mut b.aprem_arr_saisie,
+                                        &mut b.aprem_sort_saisie,
                                         14,
                                         16,
                                         aprem_bloque,
@@ -1338,6 +1405,8 @@ fn employes_droite(
                                     &mut b.coche_matin,
                                     &mut b.matin_arr,
                                     &mut b.matin_sort,
+                                    &mut b.matin_arr_saisie,
+                                    &mut b.matin_sort_saisie,
                                     8,
                                     12,
                                     matin_bloque,
@@ -1351,6 +1420,8 @@ fn employes_droite(
                                     &mut b.coche_aprem,
                                     &mut b.aprem_arr,
                                     &mut b.aprem_sort,
+                                    &mut b.aprem_arr_saisie,
+                                    &mut b.aprem_sort_saisie,
                                     14,
                                     16,
                                     aprem_bloque,
@@ -1461,6 +1532,22 @@ fn employes_droite(
                 }
             }
         } else if let Some(b) = state.brouillons.get(&id).cloned() {
+            let heures = (
+                parser_heure_saisie(&b.matin_arr_saisie),
+                parser_heure_saisie(&b.matin_sort_saisie),
+                parser_heure_saisie(&b.aprem_arr_saisie),
+                parser_heure_saisie(&b.aprem_sort_saisie),
+            );
+            if heures.0.is_err() || heures.1.is_err() || heures.2.is_err() || heures.3.is_err() {
+                state.message_action = "Heure invalide : utilisez le format HH:MM (ex. 07:00).".into();
+                state.message_action_ok = false;
+            } else {
+            let (heure_matin_arr, heure_matin_sort, heure_aprem_arr, heure_aprem_sort) = (
+                heures.0.unwrap(),
+                heures.1.unwrap(),
+                heures.2.unwrap(),
+                heures.3.unwrap(),
+            );
             let ferie_matin = ferie_bloque_periode(ferie_jour.as_deref(), true);
             let ferie_aprem = ferie_bloque_periode(ferie_jour.as_deref(), false);
             let cj = state.conges_jour.get(&id).cloned();
@@ -1471,22 +1558,22 @@ fn employes_droite(
             let aprem_bloque = ferie_aprem || conge_aprem;
 
             let ma = if b.coche_matin && !matin_bloque {
-                b.matin_arr
+                heure_matin_arr
             } else {
                 None
             };
             let ms = if b.coche_matin && !matin_bloque {
-                b.matin_sort
+                heure_matin_sort
             } else {
                 None
             };
             let aa = if b.coche_aprem && !aprem_bloque {
-                b.aprem_arr
+                heure_aprem_arr
             } else {
                 None
             };
             let as_ = if b.coche_aprem && !aprem_bloque {
-                b.aprem_sort
+                heure_aprem_sort
             } else {
                 None
             };
@@ -1541,6 +1628,7 @@ fn employes_droite(
                     state.message_action_ok = false;
                 }
             }
+            }
         }
     }
 }
@@ -1591,6 +1679,26 @@ fn bouton_filtre(
     ui.add(bouton).clicked()
 }
 
+fn parser_heure_saisie(valeur: &str) -> Result<Option<NaiveTime>, ()> {
+    let valeur = valeur.trim().to_lowercase().replace('h', ":");
+    if valeur.is_empty() {
+        return Ok(None);
+    }
+
+    // Accepte aussi les saisies courtes "6", "7" ou "7h", interprétées
+    // comme 06:00, 07:00 et 07:00. Le format recommandé reste HH:MM.
+    let compact = valeur.trim_end_matches(':');
+    if !compact.contains(':') && compact.chars().all(|c| c.is_ascii_digit()) {
+        let heure = compact.parse::<u32>().map_err(|_| ())?;
+        return NaiveTime::from_hms_opt(heure, 0, 0).map(Some).ok_or(());
+    }
+
+    NaiveTime::parse_from_str(&valeur, "%H:%M")
+        .or_else(|_| NaiveTime::parse_from_str(&valeur, "%H:%M:%S"))
+        .map(Some)
+        .map_err(|_| ())
+}
+
 fn bloc_plage(
     ui: &mut egui::Ui,
     id_unique: &str,
@@ -1598,6 +1706,8 @@ fn bloc_plage(
     coche: &mut bool,
     arrivee: &mut Option<NaiveTime>,
     sortie: &mut Option<NaiveTime>,
+    arrivee_saisie: &mut String,
+    sortie_saisie: &mut String,
     h_defaut_arr: u32,
     h_defaut_sort: u32,
     bloque: bool,
@@ -1677,23 +1787,15 @@ fn bloc_plage(
                 if coche_apres && !coche_avant {
                     if arrivee.is_none() {
                         *arrivee = NaiveTime::from_hms_opt(h_defaut_arr, 0, 0);
+                        *arrivee_saisie = format!("{:02}:00", h_defaut_arr);
                     }
                     if sortie.is_none() {
                         *sortie = NaiveTime::from_hms_opt(h_defaut_sort, 0, 0);
+                        *sortie_saisie = format!("{:02}:00", h_defaut_sort);
                     }
                 }
 
                 ui.add_space(8.0);
-
-                let h_init_arr = arrivee.map(|t| t.hour()).unwrap_or(h_defaut_arr);
-                let m_init_arr = arrivee.map(|t| t.minute()).unwrap_or(0);
-                let h_init_sor = sortie.map(|t| t.hour()).unwrap_or(h_defaut_sort);
-                let m_init_sor = sortie.map(|t| t.minute()).unwrap_or(0);
-
-                let mut h = h_init_arr;
-                let mut m = m_init_arr;
-                let mut h2 = h_init_sor;
-                let mut m2 = m_init_sor;
 
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
@@ -1703,31 +1805,24 @@ fn bloc_plage(
                             .strong(),
                     );
                     ui.add_space(4.0);
-                    let ch1 = ui
-                        .add(
-                            egui::DragValue::new(&mut h)
-                                .range(0..=23)
-                                .speed(1)
-                                .custom_formatter(|n, _| format!("{:02}", n as i64)),
-                        )
-                        .changed();
-                    let ch2 = ui
-                        .add(
-                            egui::DragValue::new(&mut m)
-                                .range(0..=59)
-                                .speed(1)
-                                .custom_formatter(|n, _| format!("{:02}", n as i64)),
-                        )
-                        .changed();
-                    if ch1 || ch2 {
-                        if let Some(t) = NaiveTime::from_hms_opt(h, m, 0) {
-                            *arrivee = Some(t);
-                            *coche = true;
+                    let r_arr = ui.add(
+                        egui::TextEdit::singleline(arrivee_saisie)
+                            .desired_width(62.0)
+                            .hint_text("HH:MM")
+                            .margin(egui::vec2(5.0, 4.0)),
+                    );
+                    if r_arr.changed() {
+                        match parser_heure_saisie(arrivee_saisie) {
+                            Ok(Some(t)) => {
+                                *arrivee = Some(t);
+                                *coche = true;
+                            }
+                            Ok(None) => *arrivee = None,
+                            Err(()) => {}
                         }
                     }
 
                     ui.add_space(10.0);
-
                     ui.label(
                         egui::RichText::new("Sortie")
                             .size(11.0)
@@ -1735,29 +1830,24 @@ fn bloc_plage(
                             .strong(),
                     );
                     ui.add_space(4.0);
-                    let ch3 = ui
-                        .add(
-                            egui::DragValue::new(&mut h2)
-                                .range(0..=23)
-                                .speed(1)
-                                .custom_formatter(|n, _| format!("{:02}", n as i64)),
-                        )
-                        .changed();
-                    let ch4 = ui
-                        .add(
-                            egui::DragValue::new(&mut m2)
-                                .range(0..=59)
-                                .speed(1)
-                                .custom_formatter(|n, _| format!("{:02}", n as i64)),
-                        )
-                        .changed();
-                    if ch3 || ch4 {
-                        if let Some(t) = NaiveTime::from_hms_opt(h2, m2, 0) {
-                            *sortie = Some(t);
-                            *coche = true;
+                    let r_sort = ui.add(
+                        egui::TextEdit::singleline(sortie_saisie)
+                            .desired_width(62.0)
+                            .hint_text("HH:MM")
+                            .margin(egui::vec2(5.0, 4.0)),
+                    );
+                    if r_sort.changed() {
+                        match parser_heure_saisie(sortie_saisie) {
+                            Ok(Some(t)) => {
+                                *sortie = Some(t);
+                                *coche = true;
+                            }
+                            Ok(None) => *sortie = None,
+                            Err(()) => {}
                         }
                     }
                 });
+
             });
     });
 }
@@ -1792,4 +1882,3 @@ fn jours_dans_mois(annee: i32, mois: u32) -> u32 {
         _ => 30,
     }
 }
-

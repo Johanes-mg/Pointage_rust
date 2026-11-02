@@ -1,6 +1,8 @@
 use crate::database::Database;
 use crate::models::Utilisateur;
 use crate::theme;
+use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
 pub struct LoginState {
     pub nom_complet: String,
@@ -13,22 +15,33 @@ pub struct LoginState {
     pub afficher_mdp: bool,
     pub afficher_confirm: bool,
     pub premier_affichage: bool,
+    pub authentification_en_cours: bool,
+    pub resultat_authentification: Option<Receiver<Result<Option<Utilisateur>, String>>>,
 }
 
 impl LoginState {
     pub fn new(db: &Database) -> Self {
-        let premier = db.aucun_utilisateur().unwrap_or(true);
+        let (premier, message) = match db.aucun_utilisateur() {
+            Ok(true) => (true, String::new()),
+            Ok(false) => (false, String::new()),
+            Err(e) => (
+                false,
+                format!("Impossible de vérifier les comptes existants : {}", e),
+            ),
+        };
         Self {
             nom_complet: String::new(),
             utilisateur: String::new(),
             mot_de_passe: String::new(),
             confirmation: String::new(),
             mode_creation: premier,
-            message: String::new(),
+            message,
             message_ok: false,
             afficher_mdp: false,
             afficher_confirm: false,
             premier_affichage: true,
+            authentification_en_cours: false,
+            resultat_authentification: None,
         }
     }
 }
@@ -40,6 +53,42 @@ pub enum LoginAction {
 
 pub fn afficher(ctx: &egui::Context, db: &Database, state: &mut LoginState) -> LoginAction {
     let mut action = LoginAction::Aucune;
+
+    let resultat_auth = state
+        .resultat_authentification
+        .as_ref()
+        .map(|rx| rx.try_recv());
+    if let Some(resultat_auth) = resultat_auth {
+        match resultat_auth {
+            Ok(Ok(Some(utilisateur))) => {
+                state.resultat_authentification = None;
+                state.authentification_en_cours = false;
+                state.message.clear();
+                action = LoginAction::Connecte(utilisateur);
+            }
+            Ok(Ok(None)) => {
+                state.resultat_authentification = None;
+                state.authentification_en_cours = false;
+                state.message = "Nom d'utilisateur ou mot de passe incorrect.".into();
+                state.message_ok = false;
+            }
+            Ok(Err(e)) => {
+                state.resultat_authentification = None;
+                state.authentification_en_cours = false;
+                state.message = format!("Erreur de connexion : {}", e);
+                state.message_ok = false;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                state.resultat_authentification = None;
+                state.authentification_en_cours = false;
+                state.message = "La vérification de connexion a été interrompue.".into();
+                state.message_ok = false;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(60));
+            }
+        }
+    }
 
     egui::CentralPanel::default()
         .frame(egui::Frame::none().fill(theme::FOND_CARTE))
@@ -291,6 +340,16 @@ fn formulaire(
         *action = valider(db, state);
     }
 
+    if state.authentification_en_cours {
+        ui.label(
+            egui::RichText::new("Vérification des identifiants en cours…")
+                .size(12.0)
+                .color(theme::ACCENT)
+                .strong(),
+        );
+        ui.add_space(8.0);
+    }
+
     if !state.message.is_empty() {
         let couleur = if state.message_ok {
             theme::SUCCES
@@ -436,6 +495,9 @@ fn bouton_secondaire(ui: &mut egui::Ui, texte: &str, largeur: f32) -> bool {
 }
 
 fn valider(db: &Database, state: &mut LoginState) -> LoginAction {
+    if state.authentification_en_cours {
+        return LoginAction::Aucune;
+    }
     state.message.clear();
 
     if state.utilisateur.trim().is_empty() {
@@ -455,8 +517,8 @@ fn valider(db: &Database, state: &mut LoginState) -> LoginAction {
             state.message_ok = false;
             return LoginAction::Aucune;
         }
-        if state.mot_de_passe.len() < 4 {
-            state.message = "Le mot de passe doit contenir au moins 4 caractères.".into();
+        if state.mot_de_passe.chars().count() < 8 {
+            state.message = "Le mot de passe doit contenir au moins 8 caractères.".into();
             state.message_ok = false;
             return LoginAction::Aucune;
         }
@@ -479,18 +541,13 @@ fn valider(db: &Database, state: &mut LoginState) -> LoginAction {
             }
         }
     } else {
-        match db.authentifier(state.utilisateur.trim(), &state.mot_de_passe) {
-            Ok(Some(u)) => LoginAction::Connecte(u),
-            Ok(None) => {
-                state.message = "Nom d'utilisateur ou mot de passe incorrect.".into();
-                state.message_ok = false;
-                LoginAction::Aucune
-            }
-            Err(e) => {
-                state.message = format!("Erreur : {}", e);
-                state.message_ok = false;
-                LoginAction::Aucune
-            }
-        }
+        state.resultat_authentification = Some(db.authentifier_en_arriere_plan(
+            state.utilisateur.trim().to_string(),
+            state.mot_de_passe.clone(),
+        ));
+        state.authentification_en_cours = true;
+        state.message = "Vérification des identifiants…".into();
+        state.message_ok = true;
+        LoginAction::Aucune
     }
 }

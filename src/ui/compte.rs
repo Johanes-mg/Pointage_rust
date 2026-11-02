@@ -1,4 +1,3 @@
-
 use crate::database::Database;
 use crate::models::Utilisateur;
 use crate::theme;
@@ -268,8 +267,8 @@ fn valider_mdp(db: &Database, utilisateur: &Utilisateur, state: &mut CompteState
     {
         state.message_mdp = "Tous les champs sont obligatoires.".into();
         state.message_mdp_ok = false;
-    } else if state.nouveau_mdp.len() < 4 {
-        state.message_mdp = "Le nouveau mot de passe doit contenir au moins 4 caractères.".into();
+    } else if state.nouveau_mdp.chars().count() < 8 {
+        state.message_mdp = "Le nouveau mot de passe doit contenir au moins 8 caractères.".into();
         state.message_mdp_ok = false;
     } else if state.nouveau_mdp != state.confirmation {
         state.message_mdp = "Les deux mots de passe ne correspondent pas.".into();

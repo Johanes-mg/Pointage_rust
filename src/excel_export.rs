@@ -9,6 +9,10 @@ pub fn exporter_tout(
     debut: NaiveDate,
     fin: NaiveDate,
 ) -> Result<String, String> {
+    if debut > fin {
+        return Err("La date de début doit être antérieure ou égale à la date de fin.".into());
+    }
+
     let dossier = directories::UserDirs::new()
         .and_then(|d| Some(d.document_dir()?.join("Pointage Exports")))
         .ok_or("Impossible de trouver Mes Documents")?;
@@ -19,8 +23,13 @@ pub fn exporter_tout(
     } else {
         format!("{}_{}", debut.format("%Y-%m-%d"), fin.format("%Y-%m-%d"))
     };
-    let horodatage = chrono::Local::now().format("%H%M%S").to_string();
-    let chemin = dossier.join(format!("pointage_{}_{}.xlsx", periode, horodatage));
+    let horodatage = chrono::Local::now().format("%Y%m%d_%H%M%S_%f").to_string();
+    let chemin = dossier.join(format!(
+        "pointage_{}_{}_{}.xlsx",
+        periode,
+        horodatage,
+        std::process::id()
+    ));
 
     let snapshot = db.exporter_snapshot(debut, fin)?;
 
@@ -46,14 +55,12 @@ pub fn exporter_tout(
         .set_font_color(Color::White)
         .set_background_color(Color::RGB(0x152B54))
         .set_align(FormatAlign::Center)
-        .set_align(FormatAlign::VerticalCenter)
         .set_border(FormatBorder::Thin);
 
     let ws = wb.add_worksheet();
     ws.set_name("Personnel").map_err(|e| e.to_string())?;
     let headers = [
-        "MATRICULE", "NOM", "PRÉNOM", "TÉLÉPHONE", "ADRESSE", "EMAIL", "STATUT", "GRADE",
-        "SITUATION FAMILIALE", "DATE ARRIVÉE",
+        "MATRICULE", "NOM", "PRÉNOM", "STATUT", "GRADE", "DATE ARRIVÉE",
     ];
     for (i, h) in headers.iter().enumerate() {
         ws.write_with_format(0, i as u16, *h, &entete)
@@ -64,15 +71,11 @@ pub fn exporter_tout(
         ws.write(r, 0, p.matricule.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
         ws.write(r, 1, &p.nom).map_err(|e| e.to_string())?;
         ws.write(r, 2, &p.prenom).map_err(|e| e.to_string())?;
-        ws.write(r, 3, p.telephone.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
-        ws.write(r, 4, p.adresse.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
-        ws.write(r, 5, p.email.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
-        ws.write(r, 6, p.statut.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
-        ws.write(r, 7, p.grade.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
-        ws.write(r, 8, p.situation_familiale.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
+        ws.write(r, 3, p.statut.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
+        ws.write(r, 4, p.grade.as_deref().unwrap_or("")).map_err(|e| e.to_string())?;
         ws.write(
             r,
-            9,
+            5,
             p.date_arrivee
                 .map(|d| d.format("%d/%m/%Y").to_string())
                 .unwrap_or_default(),
@@ -85,7 +88,7 @@ pub fn exporter_tout(
     ws.set_name("Pointages").map_err(|e| e.to_string())?;
     let headers = [
         "MATRICULE", "NOM", "PRÉNOM", "DATE", "STATUT", "MATIN ARRIVÉE", "MATIN SORTIE",
-        "APRÈS-MIDI ARRIVÉE", "APRÈS-MIDI SORTIE", "TOTAL JOUR", "OBSERVATION",
+        "APRÈS-MIDI ARRIVÉE", "APRÈS-MIDI SORTIE", "TOTAL HEURES", "OBSERVATION",
     ];
     for (i, h) in headers.iter().enumerate() {
         ws.write_with_format(0, i as u16, *h, &entete)
@@ -101,8 +104,8 @@ pub fn exporter_tout(
                 let jour_entier = periodes.iter().any(|x| x == "jour");
                 let matin = periodes.iter().any(|x| x == "matin");
                 let aprem = periodes.iter().any(|x| x == "aprem");
-                if jour_entier {
-                    "férié".to_string()
+                if jour_entier || (matin && aprem) {
+                    "férié (jour entier)".to_string()
                 } else {
                     let mut parts: Vec<&str> = Vec::new();
                     if matin {
@@ -132,6 +135,39 @@ pub fn exporter_tout(
     ws.autofit();
 
     let ws = wb.add_worksheet();
+    ws.set_name("Jours fériés").map_err(|e| e.to_string())?;
+    let headers = ["DATE", "PÉRIODE"];
+    for (i, h) in headers.iter().enumerate() {
+        ws.write_with_format(0, i as u16, *h, &entete)
+            .map_err(|e| e.to_string())?;
+    }
+    let mut feries_tries: Vec<_> = snapshot.feries.iter().collect();
+    feries_tries.sort_by(|a, b| a.0.cmp(b.0));
+    let mut ligne_ferie = 1_u32;
+    for (date, periodes) in feries_tries {
+        let jour = periodes.iter().any(|p| p == "jour");
+        let matin = periodes.iter().any(|p| p == "matin");
+        let aprem = periodes.iter().any(|p| p == "aprem");
+        let libelle = if jour || (matin && aprem) {
+            "Jour entier".to_string()
+        } else if matin {
+            "Matin".to_string()
+        } else if aprem {
+            "Après-midi".to_string()
+        } else {
+            "Non défini".to_string()
+        };
+        let date_affichee = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|e| format!("Date de jour férié invalide dans la base : {}", e))?
+            .format("%d/%m/%Y")
+            .to_string();
+        ws.write(ligne_ferie, 0, date_affichee).map_err(|e| e.to_string())?;
+        ws.write(ligne_ferie, 1, libelle).map_err(|e| e.to_string())?;
+        ligne_ferie += 1;
+    }
+    ws.autofit();
+
+    let ws = wb.add_worksheet();
     ws.set_name("Bilan").map_err(|e| e.to_string())?;
     let headers = [
         "PERSONNE", "JOURS PRÉSENT", "MATINS", "APRÈS-MIDIS", "TOTAL HEURES",
@@ -147,7 +183,7 @@ pub fn exporter_tout(
         ws.write(r, 1, b.jours_presents).map_err(|e| e.to_string())?;
         ws.write(r, 2, b.matins_presents).map_err(|e| e.to_string())?;
         ws.write(r, 3, b.apres_midis_presents).map_err(|e| e.to_string())?;
-        ws.write(r, 4, &b.total_heures).map_err(|e| e.to_string())?;
+        ws.write(r, 4, b.total_heures).map_err(|e| e.to_string())?;
         ws.write(r, 5, &b.moyenne_arrivee).map_err(|e| e.to_string())?;
     }
     ws.autofit();
@@ -159,8 +195,7 @@ pub fn exporter_tout(
         ws.write_with_format(0, i as u16, *h, &entete)
             .map_err(|e| e.to_string())?;
     }
-    let classement = db.get_classement_periode(debut, fin)?;
-    for (i, c) in classement.iter().enumerate() {
+    for (i, c) in snapshot.classement.iter().enumerate() {
         let r = (i + 1) as u32;
         ws.write(r, 0, &c.0).map_err(|e| e.to_string())?;
         ws.write(r, 1, (c.1 * 10.0).round() / 10.0).map_err(|e| e.to_string())?;
@@ -178,7 +213,9 @@ pub fn exporter_tout(
     for (i, c) in snapshot.conges.iter().enumerate() {
         let r = (i + 1) as u32;
         let nom = noms_par_id.get(&c.personnel_id).cloned().unwrap_or_default();
-        let duree = (c.date_fin - c.date_debut).num_days() + 1;
+        let nombre_jours = (c.date_fin - c.date_debut).num_days() + 1;
+        let coefficient = if c.periode == "jour" { 1.0 } else { 0.5 };
+        let duree = nombre_jours as f64 * coefficient;
         let libelle_periode = match c.periode.as_str() {
             "matin" => "Matin",
             "aprem" => "Après-midi",
@@ -188,7 +225,7 @@ pub fn exporter_tout(
         ws.write(r, 1, c.date_debut.format("%d/%m/%Y").to_string()).map_err(|e| e.to_string())?;
         ws.write(r, 2, c.date_fin.format("%d/%m/%Y").to_string()).map_err(|e| e.to_string())?;
         ws.write(r, 3, libelle_periode).map_err(|e| e.to_string())?;
-        ws.write(r, 4, duree as u32).map_err(|e| e.to_string())?;
+        ws.write(r, 4, duree).map_err(|e| e.to_string())?;
     }
     ws.autofit();
 
@@ -204,7 +241,22 @@ pub fn exporter_tout(
     ws.write(3, 1, chrono::Local::now().format("%d/%m/%Y %H:%M").to_string()).map_err(|e| e.to_string())?;
     ws.autofit();
 
-    wb.save(&chemin).map_err(|e| e.to_string())?;
+    let nom_final = chemin
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Nom de fichier Excel invalide.".to_string())?;
+    let chemin_temp = dossier.join(format!(".{}.tmp.xlsx", nom_final));
+
+    if let Err(e) = wb.save(&chemin_temp) {
+        let _ = std::fs::remove_file(&chemin_temp);
+        return Err(format!("Création du fichier Excel impossible : {}", e));
+    }
+
+    if let Err(e) = std::fs::rename(&chemin_temp, &chemin) {
+        let _ = std::fs::remove_file(&chemin_temp);
+        return Err(format!("Finalisation du fichier Excel impossible : {}", e));
+    }
+
     Ok(chemin.to_string_lossy().to_string())
 }
 
@@ -212,7 +264,7 @@ fn fmt_h(t: Option<chrono::NaiveTime>) -> String {
     t.map(|x| x.format("%H:%M").to_string()).unwrap_or_default()
 }
 
-fn total_jour(pt: &EnregistrementPointage) -> String {
+fn total_jour(pt: &EnregistrementPointage) -> f64 {
     let mut secs: i64 = 0;
     if let (Some(a), Some(s)) = (pt.matin_arrivee, pt.matin_sortie) {
         if s >= a { secs += (s - a).num_seconds(); }
@@ -221,9 +273,8 @@ fn total_jour(pt: &EnregistrementPointage) -> String {
         if s >= a { secs += (s - a).num_seconds(); }
     }
     if secs <= 0 {
-        "".into()
+        0.0
     } else {
-        format!("{}h{:02}", secs / 3600, (secs % 3600) / 60)
+        secs as f64 / 3600.0
     }
 }
-
