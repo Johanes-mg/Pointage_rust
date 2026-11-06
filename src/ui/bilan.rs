@@ -17,7 +17,8 @@ const HAUTEUR_LIGNE_PERSONNEL: f32 = 24.0;
 const TAILLE_CASE_JOUR: f32 = 58.0;
 const HAUTEUR_CASE_JOUR: f32 = 52.0;
 
-const LARGEUR_MIN_COLONNES: f32 = COL_RANG + COL_NOTE + COL_JOURS + 2.0 * COL_GAP + 2.0 * MARGE_LATERALE + 80.0;
+const LARGEUR_MIN_COLONNES: f32 =
+    COL_RANG + COL_NOTE + COL_JOURS + 2.0 * COL_GAP + 2.0 * MARGE_LATERALE + 80.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct ClassementEntry {
@@ -346,6 +347,15 @@ fn afficher_classement(
     ui.add_space(10.0);
 
     barre_mois(ui, state);
+
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new(
+            "La note moyenne porte sur les jours ouvrés du mois affiché. Un jour non pointé est compté comme absent.",
+        )
+        .size(11.5)
+        .color(theme::TEXTE_SECONDAIRE),
+    );
 
     ui.add_space(12.0);
     theme::separateur(ui);
@@ -734,9 +744,6 @@ fn note_effective(
     let mut pts_bruts = 0.0;
     let mut pts_max = 0.0;
 
-    // Chaque demi-journée non neutralisée vaut toujours 10 points,
-    // même si aucun horaire n'a été saisi : une période oubliée vaut 0.
-    // Une demi-journée fériée ou en congé est exclue du dénominateur.
     if !matin_bloque {
         pts_max += 10.0;
         pts_bruts += note_m.unwrap_or(0.0);
@@ -764,7 +771,7 @@ fn jours_ouvrables_perso(
     let mut total = 0u32;
     for j in 1..=nb {
         let d = NaiveDate::from_ymd_opt(annee, mois, j).unwrap();
-        if est_week_end(d) || d > Local::now().date_naive() {
+        if est_week_end(d) {
             continue;
         }
         if ferie_jour_entier(feries, j) {
@@ -806,9 +813,7 @@ fn calculer_classement(
             let mut somme = 0.0_f64;
             let mut compte = 0_usize;
             for pt in pointages.iter().filter(|pt| pt.personnel_id == p.id) {
-                if est_week_end(pt.date_pointage)
-                    || pt.date_pointage > Local::now().date_naive()
-                {
+                if est_week_end(pt.date_pointage) {
                     continue;
                 }
                 if let Some(arrivee) = p.date_arrivee {
@@ -975,10 +980,7 @@ fn afficher_bilan_perso(
             let week_end = est_week_end(date);
             let pointe = jours_pointes_set.contains(&j);
             let detail = state.date_detaillee == Some(date);
-            let avant_arrivee = p_sel
-                .date_arrivee
-                .map(|a| date < a)
-                .unwrap_or(false);
+            let avant_arrivee = p_sel.date_arrivee.map(|a| date < a).unwrap_or(false);
             let (conge_m, conge_a) = conge_periodes(&conges, p_sel.id, date);
             let conge_total = conge_m && conge_a;
             let conge_partiel = (conge_m ^ conge_a) && !conge_total;
@@ -1010,13 +1012,13 @@ fn afficher_bilan_perso(
             } else if conge_partiel || ferie_m || ferie_a {
                 (theme::FERIE_DEMI_BG, theme::WARNING)
             } else if !pointe {
-                (theme::FOND, theme::PRIMAIRE)
+                (theme::JOUR_MAUVAIS_BG, theme::DANGER)
             } else {
                 match note {
                     Some(n) if n >= 16.0 => (theme::JOUR_BIEN_BG, theme::SUCCES),
                     Some(n) if n >= 10.0 => (theme::JOUR_MOYEN_BG, theme::WARNING),
                     Some(_) => (theme::JOUR_MAUVAIS_BG, theme::DANGER),
-                    None => (theme::FOND, theme::PRIMAIRE),
+                    None => (theme::JOUR_MAUVAIS_BG, theme::DANGER),
                 }
             };
 
@@ -1038,13 +1040,7 @@ fn afficher_bilan_perso(
                 );
                 if !week_end && !avant_arrivee && !conge_total {
                     if (ferie_m || ferie_a) && !ferie_j {
-                        ui.painter().text(
-                            egui::pos2(rect.right() - 5.0, rect.top() + 3.0),
-                            egui::Align2::RIGHT_TOP,
-                            ".",
-                            egui::FontId::proportional(11.0),
-                            theme::WARNING,
-                        );
+                        ui.painter().circle_filled(egui::pos2(rect.right() - 8.0, rect.top() + 8.0), 3.0, theme::WARNING);
                     }
                     if conge_partiel {
                         ui.painter().text(
@@ -1091,7 +1087,7 @@ fn afficher_bilan_perso(
         )
         .unwrap();
 
-        if est_week_end(date) || date > Local::now().date_naive() {
+        if est_week_end(date) {
             continue;
         }
         if let Some(arrivee) = p_sel.date_arrivee {
@@ -1208,7 +1204,11 @@ fn afficher_bilan_perso(
         match dict.get(&d) {
             None => {
                 if !ferie_jour_entier(&feries, j) {
-                    ui.label("Aucun pointage enregistré pour cette date.");
+                    ui.label(
+                        egui::RichText::new("Aucun pointage enregistré : jour compté comme absent.")
+                            .size(12.5)
+                            .color(theme::DANGER),
+                    );
                 }
             }
             Some(pt) => {
@@ -1314,7 +1314,7 @@ fn graphique_barres(
         (bien, theme::SUCCES),
         (moyen, theme::WARNING),
         (mauvais, theme::DANGER),
-        (absent, theme::TEXTE_SECONDAIRE),
+        (absent, theme::DANGER),
         (en_conge, theme::WARNING),
     ];
     for (valeur, couleur) in entrees {

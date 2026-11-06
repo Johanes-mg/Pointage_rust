@@ -519,8 +519,6 @@ impl Database {
         })
     }
 
-    /// Lance la vérification du mot de passe dans un thread dédié afin de ne
-    /// pas bloquer la boucle d'affichage egui pendant le calcul PBKDF2.
     pub fn authentifier_en_arriere_plan(
         &self,
         nom_utilisateur: String,
@@ -539,6 +537,7 @@ impl Database {
         rx
     }
 
+    #[allow(dead_code)]
     pub fn authentifier(
         &self,
         nom_utilisateur: &str,
@@ -1000,6 +999,7 @@ impl Database {
         })
     }
 
+    #[allow(dead_code)]
     pub fn set_ferie(
         &self,
         date: NaiveDate,
@@ -1025,6 +1025,7 @@ impl Database {
         })
     }
 
+    #[allow(dead_code)]
     pub fn clear_ferie_jour(&self, date: NaiveDate) -> Result<(), String> {
         self.with_conn(|conn| {
             conn.execute(
@@ -1415,6 +1416,7 @@ impl Database {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_classement_periode(
         &self,
         debut: NaiveDate,
@@ -1441,9 +1443,8 @@ impl Database {
 
         for p in personnel {
             let mut jours_ouvrables = 0u32;
-            let date_fin_effective = fin.min(chrono::Local::now().date_naive());
             let mut date = debut;
-            while date <= date_fin_effective {
+            while date <= fin {
                 let weekend = matches!(date.weekday(), Weekday::Sat | Weekday::Sun);
                 let avant_arrivee = p.date_arrivee.map(|d| date < d).unwrap_or(false);
                 let (conge_matin, conge_aprem) =
@@ -1467,7 +1468,6 @@ impl Database {
             for pt in pointages.iter().filter(|pt| pt.personnel_id == p.id) {
                 let date = pt.date_pointage;
                 if matches!(date.weekday(), Weekday::Sat | Weekday::Sun)
-                    || date > chrono::Local::now().date_naive()
                     || p.date_arrivee.map(|d| date < d).unwrap_or(false)
                     || Self::ferie_entier(&feries, date)
                 {
@@ -1491,8 +1491,6 @@ impl Database {
                         .map(|v| v.iter().any(|periode| periode == "aprem"))
                         .unwrap_or(false);
 
-                // Même règle que le bilan à l'écran : une demi-journée
-                // neutralisée ne pénalise pas la note de la demi-journée travaillée.
                 let mut points = 0.0;
                 let mut points_max = 0.0;
 
@@ -1676,8 +1674,6 @@ impl Database {
                 .map_err(|e| format!("Impossible d'exclure les comptes de la sauvegarde : {}", e))?;
             copie.execute("DELETE FROM sqlite_sequence WHERE name = 'Utilisateur'", [])
                 .map_err(|e| e.to_string())?;
-            // VACUUM réécrit physiquement le fichier pour ne pas laisser
-            // les anciennes pages contenant les mots de passe dans le freelist.
             copie.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
                 .map_err(|e| format!("Nettoyage physique des données de compte impossible : {}", e))?;
             let integrite: String = copie.query_row("PRAGMA integrity_check", [], |r| r.get(0)).map_err(|e| e.to_string())?;
@@ -2008,8 +2004,6 @@ impl Database {
 
         drop(verif);
 
-        // Le fichier source est maintenant validé : on crée la sauvegarde juste
-        // avant la transaction d'import, sans produire de backup pour un fichier invalide.
         let _ = self.sauvegarde_avant_import()?;
 
         self.with_conn(|conn| {

@@ -617,16 +617,6 @@ fn charger_pointages_jour(db: &Database, state: &mut PointageState) {
     state.cache_date_pointages = Some(state.date_selectionnee);
 }
 
-fn prochaine_periode(courante: Option<&str>) -> Option<&'static str> {
-    match courante {
-        None => Some("jour"),
-        Some("jour") => Some("matin"),
-        Some("matin") => Some("aprem"),
-        Some("aprem") => None,
-        _ => Some("jour"),
-    }
-}
-
 fn libelle_bouton_ferie(courante: Option<&str>) -> &'static str {
     match courante {
         None => "Marquer férié (jour)",
@@ -866,13 +856,7 @@ fn calendrier_gauche(ui: &mut egui::Ui, db: &Database, state: &mut PointageState
                             texte,
                         );
                         if !week_end && (est_ferie_matin || est_ferie_aprem) {
-                            painter.text(
-                                egui::pos2(rect.right() - 6.0, rect.top() + 4.0),
-                                egui::Align2::RIGHT_TOP,
-                                ".",
-                                egui::FontId::proportional(11.0),
-                                theme::WARNING,
-                            );
+                            painter.circle_filled(egui::pos2(rect.right() - 8.0, rect.top() + 8.0), 3.0, theme::WARNING);
                         }
                     }
 
@@ -1244,7 +1228,6 @@ fn employes_droite(
         return;
     }
 
-    // true = annuler un pointage déjà enregistré ; false = enregistrer les modifications.
     let mut action_enregistrer: Option<(i64, bool)> = None;
     let mut action_ouvrir_conge: Option<(i64, String)> = None;
 
@@ -1468,8 +1451,6 @@ fn employes_droite(
                                             .map(|sauve| sauve != b)
                                             .unwrap_or(true);
 
-                                        // Le bouton apparaît seulement après une modification.
-                                        // Après sauvegarde, il devient le bouton d'annulation.
                                         if modifie {
                                             if theme::bouton_image_seule(
                                                 ui,
@@ -1685,8 +1666,6 @@ fn parser_heure_saisie(valeur: &str) -> Result<Option<NaiveTime>, ()> {
         return Ok(None);
     }
 
-    // Accepte aussi les saisies courtes "6", "7" ou "7h", interprétées
-    // comme 06:00, 07:00 et 07:00. Le format recommandé reste HH:MM.
     let compact = valeur.trim_end_matches(':');
     if !compact.contains(':') && compact.chars().all(|c| c.is_ascii_digit()) {
         let heure = compact.parse::<u32>().map_err(|_| ())?;
